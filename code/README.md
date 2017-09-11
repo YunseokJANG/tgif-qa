@@ -17,6 +17,8 @@ Setup Instructions
     python -m spacy.en.download
     ```
 
+* Install TensorFlow "v0.10"
+
 * Set TGIF-QA dataset and related files in code folder.
 
     ```
@@ -106,4 +108,4 @@ Run Pretrained Models
 
 ## Notes
 
-Last Edit: July 21, 2017
+Last Edit: Sep 11, 2017
