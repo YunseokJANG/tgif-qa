@@ -12,7 +12,9 @@ from models.frameqa_models import *
 from models.mc_models import *
 
 # Training Params
-tf.flags.DEFINE_string("task", "Count", "[Count, Action, FrameQA, Trans]")
+tf.flags.DEFINE_string("vc_dir", "../dataset/tgif/Vocabulary", "vc path")
+tf.flags.DEFINE_string("df_dir", "../dataset/tgif/DataFrame", "df path")
+tf.flags.DEFINE_string("task", "Trans", "[Count, Action, FrameQA, Trans]")
 tf.flags.DEFINE_string("name", "Tp", "[C3D, Resnet, Concat, Tp, Sp, SpTp]")
 tf.flags.DEFINE_string("save_path", "./", "Save path")
 tf.flags.DEFINE_integer("random_state", 42, "Random state initialization for reproductibility")
@@ -20,7 +22,6 @@ tf.flags.DEFINE_integer("max_sequence_length", 35, "Examples will be padded/trun
 tf.flags.DEFINE_integer("num_epochs", 300, "Number of training epochs")
 tf.flags.DEFINE_integer("log_every", 25, "Number of step size for training log")
 tf.flags.DEFINE_integer("evaluate_every", 100, "Evaluate model on dev set after this number of steps")
-tf.flags.DEFINE_integer("checkpoint_every", 1000, "Evaluate model on dev set after this number of steps")
 tf.flags.DEFINE_boolean("save_checkpoint_by_param", True, "checkpoint dir save as param")
 tf.flags.DEFINE_float("learning_rate", 0.001, "learning rate for training")
 
@@ -45,7 +46,6 @@ tf.flags.DEFINE_boolean("allow_growth", True, "Allow growth to session config")
 
 FLAGS = tf.flags.FLAGS
 model_name = FLAGS.task + FLAGS.name
-
 
 # Model Params
 class_name = model_name
@@ -79,7 +79,9 @@ train_dataset = DatasetTGIF(dataset_name='train',
                                          image_feature_net=FLAGS.image_feature_net,
                                          layer=FLAGS.layer,
                                          max_length=FLAGS.max_sequence_length,
-                                         data_type=FLAGS.task)
+                                         data_type=FLAGS.task,
+                                         dataframe_dir=FLAGS.df_dir,
+                                         vocab_dir=FLAGS.vc_dir)
 train_dataset.load_word_vocabulary()
 
 val_dataset = train_dataset.split_dataset(ratio=0.1)
@@ -89,7 +91,9 @@ test_dataset = DatasetTGIF(dataset_name='test',
                             image_feature_net=FLAGS.image_feature_net,
                             layer=FLAGS.layer,
                             max_length=FLAGS.max_sequence_length,
-                            data_type=FLAGS.task)
+                            data_type=FLAGS.task,
+                            dataframe_dir=FLAGS.df_dir,
+                            vocab_dir=FLAGS.vc_dir)
 
 test_dataset.share_word_vocabulary_from(train_dataset)
 
@@ -139,28 +143,25 @@ def main():
     saver = tf.train.Saver(max_to_keep=10000)
 
     # Initialization, optionally load from checkpoint
-    sess.run(tf.initialize_all_variables())
     if FLAGS.checkpoint_path:
         checkpoint = FLAGS.checkpoint_path
         if checkpoint:
             log.info("Restoring checkpoint from {}".format(checkpoint))
             saver.restore(sess, checkpoint)
             log.info("Restored checkpoint from {}".format(checkpoint))
+    else:
+        sess.run(tf.initialize_all_variables())
 
-    # evaluation only
-    global global_acc, acc
-    global_acc = 0.0
-    acc = None
     def run_evaluation(current_step):
-        global global_acc, acc
         global checkpoint_file
         if FLAGS.test_phase:
-            dev_iter = test_dataset.batch_iter(1, FLAGS.batch_size)
+            dev_iter = test_dataset.batch_iter(1, FLAGS.batch_size, shuffle=False)
         else:
-            dev_iter = val_dataset.batch_iter(1, FLAGS.batch_size)
+            dev_iter = val_dataset.batch_iter(1, FLAGS.batch_size, shuffle=False)
 
         mean_loss, acc, _, result_json = evaluator.eval(
             dev_iter,
+            test_size=len(test_dataset.ids),
             global_step=trainer.global_step,
             generate_results=FLAGS.test_phase)
 
@@ -174,13 +175,6 @@ def main():
                             )
                     )
 
-        if not FLAGS.test_phase and global_acc <= acc:
-            global_acc = acc
-            checkpoint_file = os.path.join(os.path.dirname(checkpoint_file), str(acc)+"_"+str(mean_loss)+"_model.ckpt")
-            # Checkpoint Model
-            save_path = saver.save(sess, checkpoint_file, global_step=trainer.global_step)
-            log.info("Saved {}".format(save_path))
-
         if FLAGS.test_phase:
             # dump result into JSON
             result_json_path = os.path.join(
@@ -189,13 +183,31 @@ def main():
             with open(result_json_path, 'w') as f:
                 json.dump(result_json, f, sort_keys=True, indent=4, separators=(',', ': '))
                 log.infov("Dumped result into : %s", result_json_path)
+        else:
+            if FLAGS.task == 'Count':
+                checkpoint_file = os.path.join(os.path.dirname(checkpoint_file), str(mean_loss)+"_model.ckpt")
+            else:
+                checkpoint_file = os.path.join(os.path.dirname(checkpoint_file), str(acc)+"_model.ckpt")
 
+            save_path = saver.save(sess, checkpoint_file, global_step=trainer.global_step)
+            log.info("Saved {}".format(save_path))
 
     if FLAGS.test_phase:
         log.infov("Evaluation mode! use --test_phase")
         train_loss, train_acc, current_step, time_delta = next(trainer.train_loop(train_iter))
         current_step = sess.run(trainer.global_step)
         log.info("Sample training step %d: loss = %.5f, acc = %.5f", current_step, train_loss, train_acc)
+
+        # Ensure parameter restoration
+        from tensorflow.python import pywrap_tensorflow
+        reader = pywrap_tensorflow.NewCheckpointReader(FLAGS.checkpoint_path)
+        var_to_val_map = {}
+
+        tvars = tf.trainable_variables()
+        for v in tvars:
+            v_in_cp = reader.get_tensor(v.name[:-2])
+            sess.run(tf.assign(v, v_in_cp))
+
         run_evaluation(current_step)
         return
 
@@ -216,11 +228,6 @@ def main():
         if current_step % FLAGS.evaluate_every == 0:
             run_evaluation(current_step)
 
-        if current_step % FLAGS.checkpoint_every == 0:
-            checkpoint_file = os.path.join(os.path.dirname(checkpoint_file), str(acc) + "_"+str(train_loss)+"_model.ckpt")
-            save_path = saver.save(sess, checkpoint_file, global_step=trainer.global_step)
-            log.info("Saved {}".format(save_path))
-
 def init_model():
     task = FLAGS.task
 
@@ -236,7 +243,13 @@ def init_model():
         params_path = os.path.join(os.path.dirname(checkpoint), '%s_%s_param.hkl' % (FLAGS.task.lower(), FLAGS.name.lower()))
         log.info("Restored parameter set from {}".format(params_path))
         model_params = hkl.load(open(params_path))
-        print "ewlifjwelifjwelfjewif"
+
+    if FLAGS.test_phase:
+        model_params["dropout_keep_prob_cell_input"] = 1.
+        model_params["dropout_keep_prob_cell_output"] = 1.
+        model_params["dropout_keep_prob_fully_connected"] = 1.
+        model_params["dropout_keep_prob_output"] = 1.
+        model_params["dropout_keep_prob_image_embed"] = 1.
 
     model = Model.from_dict(model_params)
     model.print_params()
@@ -246,7 +259,7 @@ def init_model():
     answer = tf.placeholder(tf.int32, [FLAGS.batch_size, 1])
     train_flag = tf.placeholder(tf.bool)
 
-    if task is 'Count' or task is 'FrameQA':
+    if (task == 'Count') or (task == 'FrameQA'):
         question = tf.placeholder(tf.int32, [FLAGS.batch_size, SEQUENCE_LENGTH])
         question_mask = tf.placeholder(tf.int32, [FLAGS.batch_size, SEQUENCE_LENGTH])
     else:
@@ -255,7 +268,6 @@ def init_model():
 
     model.build_graph(video, video_mask, question, question_mask, answer, train_flag)
     return model, model_params
-
 
 if __name__ == '__main__':
     with graph.as_default(), sess.as_default():

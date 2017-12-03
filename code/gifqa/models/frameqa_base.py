@@ -248,7 +248,7 @@ class FrameQABaseEvaluator:
         example_count_as_float = tf.cast(self.example_count, 'float32')
 
         # Calculates the means
-        self.mean_loss = self.total_loss / example_count_as_float
+        self.mean_loss = self.total_loss * self.model.batch_size / example_count_as_float
         self.accuracy = tf.cast(self.total_correct, 'float32') / example_count_as_float
 
         # Operations to modify to the stateful variables
@@ -269,7 +269,7 @@ class FrameQABaseEvaluator:
         self.summary_v_acc = tf.scalar_summary("v_acc", self.accuracy)
 
 
-    def eval(self, batch_iter, global_step=None, sess=None,
+    def eval(self, batch_iter, test_size, global_step=None, sess=None,
              generate_results=False):
 
         sess = sess or tf.get_default_session()
@@ -282,7 +282,15 @@ class FrameQABaseEvaluator:
             feed_dict = self.model.get_feed_dict(batch_chunk)
             feed_dict[self.model.train_flag] = False
 
-            pred, val_acc, _ = sess.run([self.model.predictions, self.model.acc, self.eval_step], feed_dict=feed_dict)
+            feed_dict[self.model.dropout_keep_prob_cell_input_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_cell_output_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_fully_connected_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_output_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_image_embed_t] = 1.0
+
+            pred, val_acc, loss_, _ = sess.run(
+                [self.model.predictions, self.model.acc, self.model.mean_loss,
+                 self.eval_step], feed_dict=feed_dict)
             pred = pred.reshape(-1)
 
             if k % 5 == 0:
@@ -309,6 +317,14 @@ class FrameQABaseEvaluator:
         if self.summary_writer is not None:
             self.summary_writer.add_summary(sumstr_vloss, current_step)
             self.summary_writer.add_summary(sumstr_vacc, current_step)
+
+        # Adjust loss from duplicated data
+        N = (k+1) * self.model.batch_size
+        if N > test_size:
+            pred_ = pred[:N-test_size]
+            ans_ = batch_chunk['answer'][:N-test_size].reshape(-1)
+            acc = acc*N - val_acc*self.model.batch_size  + (pred_==ans_).sum()
+            acc /= test_size
 
         if generate_results:
             result_json_dict = {}

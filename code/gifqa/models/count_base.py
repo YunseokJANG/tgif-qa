@@ -241,7 +241,7 @@ class CountBaseEvaluator:
         example_count_as_float = tf.cast(self.example_count, 'float32')
 
         # Calculates the means
-        self.mean_loss = self.total_loss / example_count_as_float
+        self.mean_loss = self.total_loss * self.model.batch_size / example_count_as_float
         self.accuracy = tf.cast(self.total_correct, 'float32') / example_count_as_float
         self.eval_loss = tf.cast(self.total_l2, 'float32') * self.model.batch_size / example_count_as_float
 
@@ -266,7 +266,7 @@ class CountBaseEvaluator:
         self.summary_v_l2 = tf.scalar_summary("v_acc", self.eval_loss)
 
 
-    def eval(self, batch_iter, global_step=None, sess=None,
+    def eval(self, batch_iter, test_size, global_step=None, sess=None,
              generate_results=False):
 
         sess = sess or tf.get_default_session()
@@ -276,6 +276,7 @@ class CountBaseEvaluator:
         result_json = []
 
         for k, batch_chunk in enumerate(batch_iter):
+
             feed_dict = self.model.get_feed_dict(batch_chunk)
             feed_dict[self.model.train_flag] = False
 
@@ -285,7 +286,7 @@ class CountBaseEvaluator:
             feed_dict[self.model.dropout_keep_prob_output_t] = 1.0
             feed_dict[self.model.dropout_keep_prob_image_embed_t] = 1.0
 
-            pred, val_acc, eval_loss, _, mask = sess.run(
+            pred, val_acc, eval_loss_, _, mask = sess.run(
                 [self.model.predictions, self.model.acc, self.model.eval_loss,
                  self.eval_step, self.model.video_mask], feed_dict=feed_dict)
 
@@ -296,7 +297,7 @@ class CountBaseEvaluator:
                 current_accuracy, current_examples = sess.run(
                     [self.accuracy, self.example_count])
                 log.infov('Evaluation step %d, current accuracy = %.3f (%d), acc = %.3f, eval_loss = %.3f',
-                          k, current_accuracy, current_examples, val_acc, eval_loss)
+                          k, current_accuracy, current_examples, val_acc, eval_loss_)
 
             # SAMPLING
             if generate_results:
@@ -313,7 +314,6 @@ class CountBaseEvaluator:
                         'vid_length' : vid_len[j]
                     })
 
-
         loss, acc, eval_loss, sumstr_vloss, sumstr_vacc, sumstr_vl2, current_step = \
             sess.run([self.mean_loss, self.accuracy, self.eval_loss,
                       self.summary_v_loss, self.summary_v_acc, self.summary_v_l2, global_step])
@@ -321,6 +321,14 @@ class CountBaseEvaluator:
             self.summary_writer.add_summary(sumstr_vloss, current_step)
             self.summary_writer.add_summary(sumstr_vacc, current_step)
             self.summary_writer.add_summary(sumstr_vl2, current_step)
+
+        # Adjust loss from duplicated data
+        N = (k+1) * self.model.batch_size
+        if N > test_size:
+            pred_ = pred[:N-test_size]
+            ans_ = batch_chunk['answer'][:N-test_size].reshape(-1)
+            eval_loss = eval_loss*N - eval_loss_*self.model.batch_size  + ((pred_-ans_)**2).sum()
+            eval_loss /= test_size
 
         # SAMPLING
         if generate_results:
@@ -332,7 +340,6 @@ class CountBaseEvaluator:
                 result_json.append(result_json_dict[k])
 
         return [eval_loss, acc, current_step, result_json]
-
 
 
 class CountBaseTrainer:

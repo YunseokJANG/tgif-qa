@@ -36,4 +36,4 @@ Please download GIF files either from [the project page](https://github.com/rain
 
 ## Notes
 
-Last Edit: July 21, 2017
+Last Edit: December 02, 2017

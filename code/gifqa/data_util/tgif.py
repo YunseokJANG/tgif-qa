@@ -30,10 +30,7 @@ TYPE_TO_CSV = {'FrameQA': 'Train_frameqa_question.csv',
                'Action' : 'Train_action_question.csv'}
 assert_exists(TGIF_DATA_DIR)
 
-DATAFRAME_DIR = os.path.join(TGIF_DATA_DIR, 'DataFrame')
-VOCABULARY_DIR = os.path.join(TGIF_DATA_DIR, 'Vocabulary')
 VIDEO_FEATURE_DIR = os.path.join(TGIF_DATA_DIR, 'features')
-assert_exists(VOCABULARY_DIR)
 assert_exists(VIDEO_FEATURE_DIR)
 
 eos_word = '<EOS>'
@@ -49,7 +46,11 @@ class DatasetTGIF():
                  max_length=80,
                  use_moredata=False,
                  max_n_videos=None,
-                 data_type=None,):
+                 data_type=None,
+                 dataframe_dir=None,
+                 vocab_dir=None):
+        self.dataframe_dir = dataframe_dir
+        self.vocabulary_dir = vocab_dir
         self.use_moredata = use_moredata
         self.dataset_name = dataset_name
         self.image_feature_net = image_feature_net
@@ -62,6 +63,8 @@ class DatasetTGIF():
         if max_n_videos is not None:
             self.data_df = self.data_df[:max_n_videos]
         self.ids = list(self.data_df.index)
+        if dataset_name == 'train':
+            random.shuffle(self.ids)
 
         self.feat_h5 = self.read_tgif_from_hdf5()
 
@@ -102,21 +105,21 @@ class DatasetTGIF():
         assert self.data_type in ['FrameQA', 'Count', 'Trans', 'Action'], 'Should choose data type '
 
         if self.data_type == 'FrameQA':
-            train_data_path = os.path.join(DATAFRAME_DIR, 'Train_frameqa_question.csv')
-            test_data_path = os.path.join(DATAFRAME_DIR, 'Test_frameqa_question.csv')
-            self.total_q = pd.DataFrame().from_csv(os.path.join(DATAFRAME_DIR,'Total_frameqa_question.csv'), sep='\t')
+            train_data_path = os.path.join(self.dataframe_dir, 'Train_frameqa_question.csv')
+            test_data_path = os.path.join(self.dataframe_dir, 'Test_frameqa_question.csv')
+            self.total_q = pd.DataFrame().from_csv(os.path.join(self.dataframe_dir,'Total_frameqa_question.csv'), sep='\t')
         elif self.data_type == 'Count':
-            train_data_path = os.path.join(DATAFRAME_DIR, 'Train_count_question.csv')
-            test_data_path = os.path.join(DATAFRAME_DIR, 'Test_count_question.csv')
-            self.total_q = pd.DataFrame().from_csv(os.path.join(DATAFRAME_DIR,'Total_count_question.csv'), sep='\t')
+            train_data_path = os.path.join(self.dataframe_dir, 'Train_count_question.csv')
+            test_data_path = os.path.join(self.dataframe_dir, 'Test_count_question.csv')
+            self.total_q = pd.DataFrame().from_csv(os.path.join(self.dataframe_dir,'Total_count_question.csv'), sep='\t')
         elif self.data_type == 'Trans':
-            train_data_path = os.path.join(DATAFRAME_DIR, 'Train_transition_question.csv')
-            test_data_path = os.path.join(DATAFRAME_DIR, 'Test_transition_question.csv')
-            self.total_q = pd.DataFrame().from_csv(os.path.join(DATAFRAME_DIR,'Total_transition_question.csv'), sep='\t')
+            train_data_path = os.path.join(self.dataframe_dir, 'Train_transition_question.csv')
+            test_data_path = os.path.join(self.dataframe_dir, 'Test_transition_question.csv')
+            self.total_q = pd.DataFrame().from_csv(os.path.join(self.dataframe_dir,'Total_transition_question.csv'), sep='\t')
         elif self.data_type == 'Action':
-            train_data_path = os.path.join(DATAFRAME_DIR, 'Train_action_question.csv')
-            test_data_path = os.path.join(DATAFRAME_DIR, 'Test_action_question.csv')
-            self.total_q = pd.DataFrame().from_csv(os.path.join(DATAFRAME_DIR,'Total_action_question.csv'), sep='\t')
+            train_data_path = os.path.join(self.dataframe_dir, 'Train_action_question.csv')
+            test_data_path = os.path.join(self.dataframe_dir, 'Test_action_question.csv')
+            self.total_q = pd.DataFrame().from_csv(os.path.join(self.dataframe_dir,'Total_action_question.csv'), sep='\t')
 
         assert_exists(train_data_path)
         assert_exists(test_data_path)
@@ -198,8 +201,8 @@ class DatasetTGIF():
             self.word2idx[w] = idx
             self.idx2word[idx] = w
         import cPickle as pkl
-        pkl.dump(self.word2idx, open(os.path.join(VOCABULARY_DIR, 'word_to_index_%s.pkl'%self.data_type), 'w'))
-        pkl.dump(self.idx2word, open(os.path.join(VOCABULARY_DIR, 'index_to_word_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.word2idx, open(os.path.join(self.vocabulary_dir, 'word_to_index_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.idx2word, open(os.path.join(self.vocabulary_dir, 'index_to_word_%s.pkl'%self.data_type), 'w'))
 
         word_counts['.'] = nsents
         bias_init_vector = np.array([1.0*word_counts[w] if i>1 else 0 for i, w in self.idx2word.iteritems()])
@@ -208,15 +211,15 @@ class DatasetTGIF():
         bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
         self.bias_init_vector = bias_init_vector
 
-        #self.total_q = pd.DataFrame().from_csv(os.path.join(DATAFRAME_DIR,'Total_desc_question.csv'), sep='\t')
+        #self.total_q = pd.DataFrame().from_csv(os.path.join(dataframe_dir,'Total_desc_question.csv'), sep='\t')
         answers = list(set(self.total_q['answer'].values))
         self.ans2idx = {}
         self.idx2ans = {}
         for idx, w in enumerate(answers):
             self.ans2idx[w]=idx
             self.idx2ans[idx]=w
-        pkl.dump(self.ans2idx, open(os.path.join(VOCABULARY_DIR, 'ans_to_index_%s.pkl'%self.data_type), 'w'))
-        pkl.dump(self.idx2ans, open(os.path.join(VOCABULARY_DIR, 'index_to_ans_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.ans2idx, open(os.path.join(self.vocabulary_dir, 'ans_to_index_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.idx2ans, open(os.path.join(self.vocabulary_dir, 'index_to_ans_%s.pkl'%self.data_type), 'w'))
 
         # Make glove embedding.
         import spacy
@@ -231,17 +234,17 @@ class DatasetTGIF():
             w_embed = nlp(u'%s' % w).vector
             glove_matrix[i,:] = w_embed
 
-        vocab = pkl.dump(glove_matrix, open(os.path.join(VOCABULARY_DIR, 'vocab_embedding_%s.pkl'%self.data_type), 'w'))
+        vocab = pkl.dump(glove_matrix, open(os.path.join(self.vocabulary_dir, 'vocab_embedding_%s.pkl'%self.data_type), 'w'))
         self.word_matrix = glove_matrix
 
     def load_word_vocabulary(self):
 
-        word_matrix_path = os.path.join(VOCABULARY_DIR, 'vocab_embedding_%s.pkl'%self.data_type)
+        word_matrix_path = os.path.join(self.vocabulary_dir, 'vocab_embedding_%s.pkl'%self.data_type)
 
-        word2idx_path = os.path.join(VOCABULARY_DIR, 'word_to_index_%s.pkl'%self.data_type)
-        idx2word_path = os.path.join(VOCABULARY_DIR, 'index_to_word_%s.pkl'%self.data_type)
-        ans2idx_path = os.path.join(VOCABULARY_DIR, 'ans_to_index_%s.pkl'%self.data_type)
-        idx2ans_path = os.path.join(VOCABULARY_DIR, 'index_to_ans_%s.pkl'%self.data_type)
+        word2idx_path = os.path.join(self.vocabulary_dir, 'word_to_index_%s.pkl'%self.data_type)
+        idx2word_path = os.path.join(self.vocabulary_dir, 'index_to_word_%s.pkl'%self.data_type)
+        ans2idx_path = os.path.join(self.vocabulary_dir, 'ans_to_index_%s.pkl'%self.data_type)
+        idx2ans_path = os.path.join(self.vocabulary_dir, 'index_to_ans_%s.pkl'%self.data_type)
 
         if not (os.path.exists(word_matrix_path) and os.path.exists(word2idx_path) and \
                 os.path.exists(idx2word_path) and os.path.exists(ans2idx_path) and \
@@ -300,7 +303,7 @@ class DatasetTGIF():
         '''
         Iterate caption strings associated in the vid/gifs.
         '''
-        qa_data_df = pd.DataFrame().from_csv(os.path.join(DATAFRAME_DIR, TYPE_TO_CSV[self.data_type]), sep='\t')
+        qa_data_df = pd.DataFrame().from_csv(os.path.join(self.dataframe_dir, TYPE_TO_CSV[self.data_type]), sep='\t')
 
         all_sents = []
         for row in qa_data_df.iterrows():
@@ -324,10 +327,6 @@ class DatasetTGIF():
 
     def load_video_feature(self, key):
         key_df = self.data_df.loc[key,'key']
-        # if isinstance(key_df, int):
-            # video_id = str(key_df)
-        # else:
-            # video_id = str(key_df[0])
         video_id = str(key_df)
 
         if self.image_feature_net == 'resnet':
@@ -381,7 +380,7 @@ class DatasetTGIF():
                 assert list(video_feature.shape[1:]) == [1, 1, 4096+2048]
             elif self.layer.lower() == 'conv':
                 c3d_feature = np.transpose(c3d_feature.reshape([-1,1024,7,7]), [0,2,3,1])
-                resnet_feature = resnet_feature.reshape([-1,7,7,2048])
+                resnet_feature = np.transpose(resnet_feature.reshape([-1,2048,7,7]), [0, 2, 3, 1])
                 video_feature = np.concatenate((c3d_feature, resnet_feature),
                                                axis=len(c3d_feature.shape)-1)
                 assert list(video_feature.shape[1:]) == [7, 7, 1024+2048]
@@ -725,7 +724,9 @@ class DatasetTGIF():
                                  max_length=self.max_length,
                                  use_moredata=self.use_moredata,
                                  max_n_videos=self.max_n_videos,
-                                 data_type=self.data_type)
+                                 data_type=self.data_type,
+                                dataframe_dir=self.dataframe_dir,
+                                 vocab_dir=self.vocabulary_dir)
 
         data_split.ids = self.ids[-int(ratio*len(self.ids)):]
         self.ids = self.ids[:-int(ratio*len(self.ids))]

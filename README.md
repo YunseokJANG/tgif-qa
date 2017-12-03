@@ -27,7 +27,7 @@ Note: Since our CVPR 2017 paper, we extended our dataset by collecting more ques
 
 Have any question? Please contact:
 
-Yunseok Jang [(yunseok.jang@vision.snu.ac.kr)](mailto:yunseok.jang@vision.snu.ac.kr) and Yale Song [(yalesong@yahoo-inc.com)](mailto:yalesong@yahoo-inc.com)
+Yunseok Jang [(yunseok.jang@snu.ac.kr)](mailto:yunseok.jang@snu.ac.kr) and Yale Song [(yalesong@csail.mit.edu)](mailto:yalesong@csail.mit.edu)
 
 
 
@@ -61,21 +61,21 @@ Yunseok Jang [(yunseok.jang@vision.snu.ac.kr)](mailto:yunseok.jang@vision.snu.ac
 
 ## Quantitative Results
 
-| Model                                    | Repetition Count (MSE) | Repeating Action (Accuracy) | State Transition (Accuracy) | Frame QA (Accuracy) |
+| Model                                    | Repetition Count (L2 loss) | Repeating Action (Accuracy) | State Transition (Accuracy) | Frame QA (Accuracy) |
 | ---------------------------------------- | ---------------------: | --------------------------: | --------------------------: | ------------------: |
 | Random Chance                            |                 6.9229 |                       20.00 |                       20.00 |                0.06 |
-| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (aggr) [NIPS 2015] |                 1.0781 |                       46.84 |                       56.85 |               34.59 |
-| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (avg) [NIPS 2015] |                 1.7232 |                       48.77 |                       34.82 |               34.97 |
-| [VQA-MCB](https://arxiv.org/abs/1606.01847) (aggr) [EMNLP 2016] |                 2.4531 |                       58.85 |                       24.27 |               25.70 |
-| [VQA-MCB](https://arxiv.org/abs/1606.01847) (avg) [EMNLP 2016] |                 2.5696 |                       29.13 |                       32.96 |               15.49 |
-| [Yu et al.](https://arxiv.org/abs/1610.02947) [CVPR 2017] |                 1.8984 |                       56.14 |                       63.95 |               39.64 |
-| ST-VQA-Text                              |                 1.2656 |                       47.91 |                       56.93 |               39.26 |
-| ST-VQA-ResNet                            |                 0.3438 |                       59.04 |                       65.56 |               45.60 |
-| ST-VQA-C3D                               |                 0.1406 |                       59.26 |                       64.90 |               45.18 |
-| <u>ST-VQA-Concat</u>                     |          <u>0.1094</u> |                <u>60.13</u> |                <u>65.70</u> |        <u>48.20</u> |
-| ST-VQA-Sp.                               |                 0.4531 |                       57.33 |                       63.72 |               45.45 |
-| **ST-VQA-Tp.**                           |             **0.0156** |                   **60.76** |                   **66.63** |           **48.56** |
-| ST-VQA-Sp.Tp.                            |                 0.5177 |                       56.99 |                       59.59 |               47.79 |
+| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (aggr) [NIPS 2015] |                 5.0921 |                       46.84 |                       56.85 |               34.59 |
+| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (avg) [NIPS 2015] |                 4.8095 |                       48.77 |                       34.82 |               34.97 |
+| [VQA-MCB](https://arxiv.org/abs/1606.01847) (aggr) [EMNLP 2016] |                 5.1738 |                       58.85 |                       24.27 |               25.70 |
+| [VQA-MCB](https://arxiv.org/abs/1606.01847) (avg) [EMNLP 2016] |                 5.5428 |                       29.13 |                       32.96 |               15.49 |
+| [Yu et al.](https://arxiv.org/abs/1610.02947) [CVPR 2017] |                 5.1387 |                       56.14 |                       63.95 |               39.64 |
+| ST-VQA-Text                              |                 5.0056 |                       47.91 |                       56.93 |               39.26 |
+| ST-VQA-ResNet                            |                 4.5539 |                       59.04 |                       65.56 |               45.60 |
+| ST-VQA-C3D                               |                 4.4478 |                       59.26 |                       64.90 |               45.18 |
+| <u>ST-VQA-Concat</u>                     |          <u>4.3759</u> |                <u>60.13</u> |                <u>65.70</u> |        <u>48.20</u> |
+| ST-VQA-Sp.                               |             **4.2825** |                       57.33 |                       63.72 |               45.45 |
+| **ST-VQA-Tp.**                           |                 4.3981 |                   **60.77** |                   **67.06** |           **49.27** |
+| ST-VQA-Sp.Tp.                            |                 4.5614 |                       56.99 |                       59.59 |               47.79 |
 
 
 
@@ -101,4 +101,4 @@ The red dotted boxes over heatmaps indicate segments in a video that include the
 
 ## Notes
 
-Last Edit: July 21, 2017
+Last Edit: December 02, 2017

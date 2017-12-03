@@ -64,8 +64,8 @@ class MCBase(ModelSaver):
         self.dropout_keep_prob_image_embed = dropout_keep_prob_image_embed
 
         self.feat_dims_arr = self.feat_dim
-        self.kernel_size = self.feat_dims_arr[0]
-        self.channel_size = self.feat_dims_arr[2]
+        self.kernel_size = int(self.feat_dims_arr[0])
+        self.channel_size = int(self.feat_dims_arr[2])
 
         self.N_PRETRAIN = 3000
         self.step = 0
@@ -285,7 +285,7 @@ class MCBaseEvaluator:
         example_count_as_float = tf.cast(self.example_count, 'float32')
 
         # Calculates the means
-        self.mean_loss = self.total_loss / example_count_as_float
+        self.mean_loss = self.total_loss * self.model.batch_size / example_count_as_float
         self.accuracy = tf.cast(self.total_correct, 'float32') / example_count_as_float
 
         # Operations to modify to the stateful variables
@@ -306,7 +306,7 @@ class MCBaseEvaluator:
         self.summary_v_acc = tf.scalar_summary("v_acc", self.accuracy)
 
 
-    def eval(self, batch_iter, global_step=None, sess=None,
+    def eval(self, batch_iter, test_size, global_step=None, sess=None,
              generate_results=False):
 
         sess = sess or tf.get_default_session()
@@ -318,6 +318,12 @@ class MCBaseEvaluator:
         for k, batch_chunk in enumerate(batch_iter):
             feed_dict = self.model.get_feed_dict(batch_chunk)
             feed_dict[self.model.train_flag] = False
+
+            feed_dict[self.model.dropout_keep_prob_cell_input_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_cell_output_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_fully_connected_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_output_t] = 1.0
+            feed_dict[self.model.dropout_keep_prob_image_embed_t] = 1.0
 
             # retrieve multichoice prediction as well
             pred, val_acc, _ = sess.run([self.model.predictions, self.model.acc, self.eval_step], feed_dict=feed_dict)
@@ -349,6 +355,14 @@ class MCBaseEvaluator:
         if self.summary_writer is not None:
             self.summary_writer.add_summary(sumstr_vloss, current_step)
             self.summary_writer.add_summary(sumstr_vacc, current_step)
+
+        # Adjust loss from duplicated data
+        N = (k+1) * self.model.batch_size
+        if N > test_size:
+            pred_ = pred[:N-test_size]
+            ans_ = batch_chunk['answer'][:N-test_size].reshape(-1)
+            acc = acc*N - val_acc*self.model.batch_size  + (pred_==ans_).sum()
+            acc /= test_size
 
         # SAMPLING
         if generate_results:

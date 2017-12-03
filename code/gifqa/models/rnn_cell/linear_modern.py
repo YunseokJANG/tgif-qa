@@ -23,7 +23,7 @@ import tensorflow as tf
 
 
 use_weight_normalization_default = False
-def linear(args, output_size, bias, bias_start=0.0, use_l2_loss = False, use_weight_normalization = use_weight_normalization_default, scope=None, timestep = -1, weight_initializer = None, orthogonal_scale_factor = 1.1): 
+def linear(args, output_size, bias, bias_start=0.0, use_l2_loss = False, use_weight_normalization = use_weight_normalization_default, scope=None, timestep = -1, weight_initializer = None, orthogonal_scale_factor = 1.1):
   """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
 
   Args:
@@ -64,7 +64,7 @@ def linear(args, output_size, bias, bias_start=0.0, use_l2_loss = False, use_wei
 
   # Now the computation.
   with tf.variable_scope(scope or "Linear"):
-    matrix = tf.get_variable("Matrix", [total_arg_size, output_size], 
+    matrix = tf.get_variable("Matrix", [total_arg_size, output_size],
                       initializer = tf.uniform_unit_scaling_initializer(), regularizer = l_regularizer)
     if use_weight_normalization: matrix = weight_normalization(matrix, timestep = timestep)
 
@@ -97,7 +97,7 @@ def batch_timesteps_linear(input, output_size, bias, bias_start=0.0, use_l2_loss
     ValueError: if some of the arguments has unspecified or wrong shape.
   """
   # Calculate the total size of arguments on dimension 2.
-  if tranpose_input: 
+  if tranpose_input:
     input = tf.transpose(input, [1,0,2])
 
   shape_list = input.get_shape().as_list()
@@ -105,7 +105,7 @@ def batch_timesteps_linear(input, output_size, bias, bias_start=0.0, use_l2_loss
 
   num_timesteps = shape_list[0]
   batch_size = shape_list[1]
-  total_arg_size = shape_list[2] 
+  total_arg_size = shape_list[2]
 
   if use_l2_loss:
     l_regularizer = tf.contrib.layers.l2_regularizer(1e-5)

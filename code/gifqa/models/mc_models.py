@@ -142,7 +142,6 @@ class MCTp(MCBase):
                 # [batch_size, length, word_dim]
                 self.embedded_start_word = tf.nn.embedding_lookup(self.word_embed_t,
                                                                   tf.ones([self.agg_batch_size], dtype=tf.int32))
-
         with tf.variable_scope("caption_rnn") as scope:
             self.caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
             # Build the recurrence.
@@ -163,6 +162,7 @@ class MCTp(MCBase):
             rnn_final_state = tf.concat(1, [
                 tf.slice(self.cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
                 tf.slice(self.cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
+
             vid_att, alpha = self.attention(rnn_final_state, self.vid_states)
             self.alpha = alpha
             final_embed = tf.add(tf.nn.tanh(linear(vid_att, 2*self.hidden_dim)),

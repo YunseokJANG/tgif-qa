@@ -35,6 +35,7 @@ Setup Instructions
 
 Pre-processing the visual features
 -----
+
 1. Download GIF files into your directory.
 
 
@@ -69,6 +70,11 @@ Pre-processing the visual features
 
 
 
+Note. We uploaded the two hdf5 files (  [Resnet_pool5](https://drive.google.com/file/d/0B15H16jpV4w2SlVleTBRT3dUTGs/view?usp=sharing), [C3D_fc6](https://drive.google.com/file/d/0B15H16jpV4w2cFZoOXpPMlFLX3M/view?usp=sharing) ), but we failed to upload the other two files because of its size.
+
+
+
+
 
 Training
 -----
@@ -97,7 +103,7 @@ Evaluation
 Run Pretrained Models
 -----
 
-* Download checkpoints for concat and temporal models from [this link](https://drive.google.com/file/d/0B3L3T96t5Td_Q2JFRmtxbEdIMUk/view?usp=sharing) and place checkpoint folders in `gifqa/pretrained_models`
+* Download checkpoints for concat and temporal models from [this link](https://drive.google.com/file/d/1EwbGkGviK6FOOI8UXQu0vdb4ELFBSoBU/view?usp=sharing) and place checkpoint folders in `gifqa/pretrained_models`
 * Run test script
     ```
     cd gifqa
@@ -108,4 +114,4 @@ Run Pretrained Models
 
 ## Notes
 
-Last Edit: Sep 11, 2017
+Last Edit: December 02, 2017

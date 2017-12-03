@@ -29,8 +29,9 @@ def linear(input_, output_size, name="linear", activation_fn=None, reuse=False):
         input_, output_size, activation_fn=activation_fn, reuse=reuse, scope=name)
     return res
 '''
-def linear(input_, output_size, name="linear", activation_fn=None, reuse=False):
+def linear(input_, output_size, name="linear", activation_fn=None, reuse=True):
     with tf.variable_scope(name):
+
         w = tf.get_variable('linear_w', [input_.get_shape()[-1], output_size],
                             initializer=tf.contrib.layers.xavier_initializer())
         b = tf.get_variable('linear_b', [output_size], initializer=tf.constant_initializer(0.0))
