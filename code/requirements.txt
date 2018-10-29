@@ -13,4 +13,5 @@ hickle>=2.0.5
 Cython>=0.23.4
 nltk>=3.2
 tqdm>=4.8.2
-spacy
+spacy==1.9.0
+colorlog

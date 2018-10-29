@@ -10,18 +10,20 @@ ST-VQA model
 Setup Instructions
 -----
 
-* Install python modules
+1. Install python modules and TensorFlow v0.10.0
 
-    ```
+    ```bash
     pip install -r requirements.txt
     python -m spacy.en.download
+    # TF for GPU (you need CUDA 7.5 and cuDNN 6.0):
+    pip install https://storage.googleapis.com/tensorflow/linux/gpu/tensorflow-0.10.0-cp27-none-linux_x86_64.whl
+    # TF for CPU:
+    #pip install https://storage.googleapis.com/tensorflow/linux/cpu/tensorflow-0.10.0-cp27-none-linux_x86_64.whl
     ```
 
-* Install TensorFlow "v0.10"
+2. Set TGIF-QA dataset and related files in code folder.
 
-* Set TGIF-QA dataset and related files in code folder.
-
-    ```
+    ```bash
     # in code folder
     mkdir dataset
     mkdir dataset/tgif
@@ -29,7 +31,7 @@ Setup Instructions
     mkdir dataset/tgif/features dataset/tgif/Vocabulary
     ```
 
-* Download GIF files in [dataset](../dataset/README.md) page and extract the zip file it into `dataset/tgif/gifs`.
+3. Download GIF files in [dataset](../dataset/README.md) page and extract the zip file it into `dataset/tgif/gifs`.
 
 
 
@@ -38,35 +40,20 @@ Pre-processing the visual features
 
 1. Download GIF files into your directory.
 
+2. Install ffmpeg.
 
-2. Extract all GIF frames into a separate folder. Here is one example script that extracts frames from a GIF file. You can save the following script and run it with "./SCRIPT_NAME.sh INPUT_FOLDER gif OUTPUT_FOLDER".
+3. Extract all GIF frames into a separate folder:
 
-    ```
-    #!/bin/bash
-    if [ "$1" == '' ] || [ "$2" == '' ] || [ "$3" == '' ]; then
-        echo "Usage: $0 <input folder> <output folder> <file extension>";
-        exit;
-    fi
-    for file in "$1"/*."$3"; do
-        destination="$2${file:${#1}:${#file}-${#1}-${#3}-1}";
-    #    echo $destination
-        mkdir -p "$destination";
-        ffmpeg -i "$file" "$destination/%d.jpg";
-    done
-    
+    ```bash
+    ./save-frames.sh dataset/tgif/{gifs,frames}
     ```
 
-
-3. Extract [ResNet-152](https://github.com/KaimingHe/deep-residual-networks) and [C3D](https://github.com/facebook/C3D) features by using each pretrained models.
+4. Extract [ResNet-152](https://github.com/KaimingHe/deep-residual-networks) and [C3D](https://github.com/facebook/C3D) features by using each pretrained models.
     - Extract 'res5c', 'pool5' for ResNet-152, and 'conv5b', 'fc6' for C3D.
     - If a GIF file contains less than 16 frames, append the last frame to have 16 frames at least.
-    - When extracting the C3D features, pad the first frame eight times for the first frame, and pad the last frame 7 time for the very last frame.
-      
-    
+    - When extracting the C3D features, use stride 1 pad the first frame eight times for the first frame, and pad the last frame 7 time for the very last frame (SAME padding).
 
-
-
-4. Wrap each extracted features into hdf5 files per layer, name them as 'TGIF_[MODEL]_[layer_name].hdf5' (ex, TGIF_C3D_fc6.hdf5, TGIF_RESNET_pool5.hdf5), and save them into 'code/dataset/tgif/features'. For example, pool5 feature and res5c feature need to be stored in a different hdf5 file. Each feature file should have to be a dictionary that uses 'key' field of each dataset file as the key of a dictionary and a numpy array of extracted features in (\#frames, feature dimension) shape. 
+5. Wrap each extracted features into hdf5 files per layer, name them as 'TGIF_[MODEL]_[layer_name].hdf5' (ex, TGIF_C3D_fc6.hdf5, TGIF_RESNET_pool5.hdf5), and save them into 'code/dataset/tgif/features'. For example, pool5 feature and res5c feature need to be stored in a different hdf5 file. Each feature file should have to be a dictionary that uses 'key' field of each dataset file as the key of a dictionary and a numpy array of extracted features in (\#frames, feature dimension) shape. 
 
 
 
