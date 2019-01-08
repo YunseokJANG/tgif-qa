@@ -1,6 +1,6 @@
 # ![](resources/tgif_logo.png)
 
-The TGIF-QA dataset contains 165K QA pairs for the animated GIFs from the [TGIF dataset](https://arxiv.org/abs/1604.02748) [Li et al. CVPR 2016]. The question & answer pairs are collected via crowdsourcing, with a carefully designed interface to ensure quality. The dataset can be used to evaluate video/animated GIF based Visual Question Answering techniques. 
+The TGIF-QA dataset contains 165K QA pairs for the animated GIFs from the [TGIF dataset](https://arxiv.org/abs/1604.02748) [Li et al. CVPR 2016]. The question & answer pairs are collected via crowdsourcing, with a carefully designed interface to ensure quality. The dataset can be used to evaluate video/animated GIF based Visual Question Answering techniques.
 
 
 
@@ -83,7 +83,7 @@ Yunseok Jang [(yunseok.jang@snu.ac.kr)](mailto:yunseok.jang@snu.ac.kr) and Yale 
 
 ## Qualitative Results
 
-### Temporal Attention
+### Spatial Attention
 
 ![](resources/spatial_example.png)
 
@@ -93,6 +93,20 @@ The red dotted boxes over heatmaps indicate segments in a video that include the
 
 ![](resources/temporal_example.png)
 
+### Attentions Visualized in Time
+
+The yellow bar indicates the strength of temporal attention at the visualized time.
+
+| Q&A Type           | Repetition Count                  | Repeating Action              | State Transition                         | Frame QA                          |
+| :----------------- | --------------------------------- | ----------------------------- | ---------------------------------------- | --------------------------------- |
+| Lively Visual (GIF) | ![](resources/count_3.gif)       | ![](resources/action_1.gif)   |  ![](resources/transition_3.gif)        | ![](resources/frameqa_1.gif)       |
+| Question           | How many times does the man shave chest ? | What does the boy do 3 times ? | What does the man do before kiss toy ? | What are the group of boys singing , dancing , and playing ? |
+| Answer             | 2 times                           | Wave hands                 | Pet toy                             | Instruments                             |
+| Lively Visual (GIF) | ![](resources/count_1.gif)              | ![](resources/action_3.gif)          | ![](resources/transition_1.gif)  | ![](resources/frameqa_2.gif)              |
+| Question           | How many times does the man flip circle ? | What does the behind do 3 times ? | What does the woman do after raise leg ? | What is the color of the shirt ? |
+| Answer             | 2 times                           | Shake butt                | Kick a mug                             | White                             |
+
+
 
 
 
@@ -101,4 +115,4 @@ The red dotted boxes over heatmaps indicate segments in a video that include the
 
 ## Notes
 
-Last Edit: December 02, 2017
+Last Edit: January 08, 2019
