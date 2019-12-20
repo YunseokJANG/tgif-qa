@@ -31,7 +31,7 @@ Examples:
 
 
 ## Downloading GIF files
-Please download GIF files either from [the project page](https://github.com/raingo/TGIF-Release) of the original [TGIF paper](https://arxiv.org/abs/1604.02748) or from [this link](https://drive.google.com/open?id=0B15H16jpV4w2NHI2QmUxV21JdkE).
+Please download GIF files either from [the project page](https://github.com/raingo/TGIF-Release) of the original [TGIF paper](https://arxiv.org/abs/1604.02748) or from [this link](https://drive.google.com/a/vision.snu.ac.kr/file/d/11wdvsTYIPcSTRMVry1tufILiNE4aAMp5/view?usp=sharing).
 
 
 ## Notes
