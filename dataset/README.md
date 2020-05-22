@@ -6,7 +6,7 @@ Each file is matched with the Table 1 in [our paper](https://arxiv.org/abs/1704.
 
 
 
-Examples: 
+Examples:
 
 
 1.

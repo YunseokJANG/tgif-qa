@@ -135,14 +135,15 @@ def preprocess_roots(roots, word_to_index):
 
 def pad_video(video_feature, dimension):
     '''
-    Fill pad to video to have same length.
+    either Fill pad to video to have same length or if too long interpolate to max_length
     Pad in Left.
     video = [pad,..., pad, frm1, frm2, ..., frmN]
     '''
     padded_feature = np.zeros(dimension)
-    max_length = dimension[0]
+    max_length = dimension[0] # usually set to 35.
     current_length = video_feature.shape[0]
     num_padding = max_length - current_length
+    # interpolation
     if num_padding == 0:
         padded_feature = video_feature
     elif num_padding < 0:

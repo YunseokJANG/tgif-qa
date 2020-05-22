@@ -15,7 +15,6 @@ import data_util
 import hickle as hkl
 import cPickle as pkl
 
-from IPython import embed
 
 __PATH__ = os.path.abspath(os.path.dirname(__file__))
 
@@ -48,7 +47,9 @@ class DatasetTGIF():
                  max_n_videos=None,
                  data_type=None,
                  dataframe_dir=None,
-                 vocab_dir=None):
+                 vocab_dir=None,
+                 feature=None,
+                 embedding_type=None):
         self.dataframe_dir = dataframe_dir
         self.vocabulary_dir = vocab_dir
         self.use_moredata = use_moredata
@@ -59,18 +60,24 @@ class DatasetTGIF():
         self.max_n_videos = max_n_videos
         self.data_type = data_type
         self.data_df = self.read_df_from_csvfile()
+        self.extracted_feature = feature
+        self.embedding_type = embedding_type
 
         if max_n_videos is not None:
             self.data_df = self.data_df[:max_n_videos]
         self.ids = list(self.data_df.index)
+
         if dataset_name == 'train':
             random.shuffle(self.ids)
 
         self.feat_h5 = self.read_tgif_from_hdf5()
 
     def __del__(self):
-        if self.image_feature_net.upper() == "CONCAT":
+        if self.image_feature_net.upper() == "CONCAT" and self.extracted_feature == "C3D":
             self.feat_h5["c3d"].close()
+            self.feat_h5["resnet"].close()
+        elif self.image_feature_net.upper() == "CONCAT" and self.extracted_feature == "optflow":
+            self.feat_h5["of_res"].close()
             self.feat_h5["resnet"].close()
         else:
             self.feat_h5.close()
@@ -79,7 +86,7 @@ class DatasetTGIF():
         if self.max_n_videos is not None:
             if self.max_n_videos <= len(self.data_df):
                 return self.max_n_videos
-        return len(self.data_df)
+        return len(self.ids)
 
     def read_tgif_from_hdf5(self):
         '''
@@ -87,7 +94,7 @@ class DatasetTGIF():
         c3d     > fc6, conv5b
         concat  > fc, conv
         '''
-        if self.image_feature_net.upper() == "CONCAT":
+        if self.image_feature_net.upper() == "CONCAT" and self.extracted_feature == "C3D":
             if self.layer.lower() == "fc":
                 c3d_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_C3D_fc6.hdf5")
                 resnet_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_RESNET_pool5.hdf5")
@@ -95,6 +102,24 @@ class DatasetTGIF():
                 c3d_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_C3D_conv5b.hdf5")
                 resnet_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_RESNET_res5c.hdf5")
             return {"c3d":h5py.File(c3d_file,'r'), "resnet":h5py.File(resnet_file,'r')}
+        elif self.image_feature_net.upper() == "CONCAT" and self.extracted_feature == "optflow":
+            if  self.layer.lower() == "pool5":
+                of_res_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_ResOF_pool5.hdf5", )
+                resnet_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_RESNET_pool5.hdf5")
+            elif self.layer.lower() == "res5c":
+                of_res_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_ResOF_res5c.hdf5", )
+                resnet_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_RESNET_res5c.hdf5")
+            log.info("Calling filepath: %s", of_res_file)
+            log.info("Calling filepath: %s", resnet_file)
+            return {"of_res":h5py.File(of_res_file,'r'), "resnet":h5py.File(resnet_file,'r')}
+        elif self.image_feature_net.upper() == "OPTFLOW" and self.extracted_feature == "optflow":
+            if  self.layer.lower() == "pool5":
+                feature_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_ResOF_pool5.hdf5", )
+            elif self.layer.lower() == "res5c":
+                feature_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_ResOF_res5c.hdf5", )
+
+            log.info("Calling filepath: %s", feature_file)
+            return h5py.File(feature_file,'r')
         else:
             feature_file = os.path.join(VIDEO_FEATURE_DIR, "TGIF_" + self.image_feature_net.upper() + "_" + self.layer.lower() + ".hdf5")
             assert_exists(feature_file)
@@ -174,6 +199,9 @@ class DatasetTGIF():
         '''
         log.infov('Building word vocabulary (%s) ...', self.dataset_name)
 
+        if not os.path.exists(os.path.join(self.vocabulary_dir, self.embedding_type)):
+            os.makedirs(os.path.join(self.vocabulary_dir, self.embedding_type))
+
         if all_captions_source is None:
             all_captions_source = self.get_all_captions()
 
@@ -201,8 +229,8 @@ class DatasetTGIF():
             self.word2idx[w] = idx
             self.idx2word[idx] = w
         import cPickle as pkl
-        pkl.dump(self.word2idx, open(os.path.join(self.vocabulary_dir, 'word_to_index_%s.pkl'%self.data_type), 'w'))
-        pkl.dump(self.idx2word, open(os.path.join(self.vocabulary_dir, 'index_to_word_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.word2idx, open(os.path.join(self.vocabulary_dir, self.embedding_type + '/word_to_index_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.idx2word, open(os.path.join(self.vocabulary_dir, self.embedding_type + '/index_to_word_%s.pkl'%self.data_type), 'w'))
 
         word_counts['.'] = nsents
         bias_init_vector = np.array([1.0*word_counts[w] if i>1 else 0 for i, w in self.idx2word.iteritems()])
@@ -211,40 +239,71 @@ class DatasetTGIF():
         bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
         self.bias_init_vector = bias_init_vector
 
-        #self.total_q = pd.DataFrame().from_csv(os.path.join(dataframe_dir,'Total_desc_question.csv'), sep='\t')
         answers = list(set(self.total_q['answer'].values))
         self.ans2idx = {}
         self.idx2ans = {}
         for idx, w in enumerate(answers):
             self.ans2idx[w]=idx
             self.idx2ans[idx]=w
-        pkl.dump(self.ans2idx, open(os.path.join(self.vocabulary_dir, 'ans_to_index_%s.pkl'%self.data_type), 'w'))
-        pkl.dump(self.idx2ans, open(os.path.join(self.vocabulary_dir, 'index_to_ans_%s.pkl'%self.data_type), 'w'))
-
-        # Make glove embedding.
-        import spacy
-        nlp = spacy.load('en', vectors='en_glove_cc_300_1m_vectors')
+        pkl.dump(self.ans2idx, open(os.path.join(self.vocabulary_dir, self.embedding_type + '/ans_to_index_%s.pkl'%self.data_type), 'w'))
+        pkl.dump(self.idx2ans, open(os.path.join(self.vocabulary_dir, self.embedding_type + '/index_to_ans_%s.pkl'%self.data_type), 'w'))
 
         max_length = len(vocab)
         GLOVE_EMBEDDING_SIZE = 300
 
-        glove_matrix = np.zeros([max_length,GLOVE_EMBEDDING_SIZE])
-        for i in range(len(vocab)):
-            w = vocab[i]
-            w_embed = nlp(u'%s' % w).vector
-            glove_matrix[i,:] = w_embed
+        if self.embedding_type == 'glove':
+            # Make glove embedding.
+            import spacy
+            nlp = spacy.load('en', vectors='en_glove_cc_300_1m_vectors')
+            log.infov('create glove embedding matrix from (%s) ...', self.dataset_name)
+            # Make glove embedding.
+            import spacy
+            nlp = spacy.load('en', vectors='en_glove_cc_300_1m_vectors')
 
-        vocab = pkl.dump(glove_matrix, open(os.path.join(self.vocabulary_dir, 'vocab_embedding_%s.pkl'%self.data_type), 'w'))
-        self.word_matrix = glove_matrix
+            glove_matrix = np.zeros([max_length,GLOVE_EMBEDDING_SIZE])
+            for i in range(len(vocab)):
+                w = vocab[i]
+                w_embed = nlp(u'%s' % w).vector
+                glove_matrix[i,:] = w_embed[:GLOVE_EMBEDDING_SIZE]
+
+            vocab = pkl.dump(glove_matrix, open(os.path.join(self.vocabulary_dir, self.embedding_type + '/vocab_embedding_%s.pkl'%self.data_type), 'w'))
+            self.word_matrix = glove_matrix
+
+        elif self.embedding_type == 'fasttext':
+            log.infov('create fasttext embedding matrix from (%s) ...', self.dataset_name)
+            vocab_dict = {}
+            fasttext_matrix = np.zeros([max_length,GLOVE_EMBEDDING_SIZE])
+            with open('../../dataset/word_vectors/crawl-300d-2M.vec', 'r') as vec:
+                next(vec) # to skip the first line which contain vocab&embed size.
+                for line in vec:
+                    cur_line = line.rstrip().split(' ')
+                    vocab_dict[cur_line[0]] = map(float, cur_line[1:])
+
+
+            dict_keys = vocab_dict.keys()
+            for i in range(max_length):
+                w = vocab[i]
+                if w in dict_keys:
+                    w_embed = vocab_dict[w]
+                else:
+                    print w, i
+                    # for out of vocab words treat it with unknown.
+                    w_embed = vocab_dict['unk']
+
+                fasttext_matrix[i,:]=w_embed
+
+            vocab = pkl.dump(fasttext_matrix, open(os.path.join(self.vocabulary_dir, self.embedding_type + '/vocab_embedding_%s.pkl'%self.data_type), 'w'))
+            self.word_matrix = fasttext_matrix
+
 
     def load_word_vocabulary(self):
 
-        word_matrix_path = os.path.join(self.vocabulary_dir, 'vocab_embedding_%s.pkl'%self.data_type)
+        word_matrix_path = os.path.join(self.vocabulary_dir, self.embedding_type + '/vocab_embedding_%s.pkl'%self.data_type)
 
-        word2idx_path = os.path.join(self.vocabulary_dir, 'word_to_index_%s.pkl'%self.data_type)
-        idx2word_path = os.path.join(self.vocabulary_dir, 'index_to_word_%s.pkl'%self.data_type)
-        ans2idx_path = os.path.join(self.vocabulary_dir, 'ans_to_index_%s.pkl'%self.data_type)
-        idx2ans_path = os.path.join(self.vocabulary_dir, 'index_to_ans_%s.pkl'%self.data_type)
+        word2idx_path = os.path.join(self.vocabulary_dir, self.embedding_type + '/word_to_index_%s.pkl'%self.data_type)
+        idx2word_path = os.path.join(self.vocabulary_dir, self.embedding_type + '/index_to_word_%s.pkl'%self.data_type)
+        ans2idx_path = os.path.join(self.vocabulary_dir, self.embedding_type + '/ans_to_index_%s.pkl'%self.data_type)
+        idx2ans_path = os.path.join(self.vocabulary_dir, self.embedding_type + '/index_to_ans_%s.pkl'%self.data_type)
 
         if not (os.path.exists(word_matrix_path) and os.path.exists(word2idx_path) and \
                 os.path.exists(idx2word_path) and os.path.exists(ans2idx_path) and \
@@ -293,7 +352,6 @@ class DatasetTGIF():
     # Dataset Access APIs (batch loading, sentence etc)
     def iter_ids(self, shuffle=False):
 
-        #if self.data_type == 'Trans':
         if shuffle:
             random.shuffle(self.ids)
         for key in self.ids:
@@ -358,32 +416,72 @@ class DatasetTGIF():
                     video_feature.reshape([-1,1024,7,7]), [0,2,3,1])
                 assert list(video_feature.shape[1:]) == [7, 7, 1024]
 
+        elif self.image_feature_net.lower() == 'optflow':
+            video_feature = np.array(self.feat_h5[video_id])
+            assert self.layer.lower() in ['pool5', 'res5c']
+            video_feature = np.array(self.feat_h5[video_id])
+            if self.layer.lower() == 'res5c':
+                video_feature = np.transpose(
+                    video_feature.reshape([-1,2048,7,7]), [0, 2, 3, 1])
+                assert list(video_feature.shape[1:]) == [7, 7, 2048]
+            elif self.layer.lower() == 'pool5':
+                video_feature = np.transpose(video_feature, [0,2,3,1])
+                assert list(video_feature.shape[1:]) == [1, 1, 2048]
+
         elif self.image_feature_net.lower() == 'concat':
-            assert self.layer.lower() in ['fc', 'conv']
-            c3d_feature = np.array(self.feat_h5["c3d"][video_id])
-            resnet_feature = np.array(self.feat_h5["resnet"][video_id])
-            if len(c3d_feature.shape) == 1:
-                c3d_feature = np.expand_dims(c3d_feature, axis=0)
-            #if len(resnet_feature.shape) == 1:
-            #    resnet_feature = np.expand_dims(resnet_feature, axis=0)
+            assert self.layer.lower() in ['fc', 'conv', 'pool5', 'res5c']
+            if "of_res" in self.feat_h5.keys():
+                of_res_feature = np.squeeze(np.array(self.feat_h5["of_res"][video_id]))
+                resnet_feature = np.array(self.feat_h5["resnet"][video_id])
 
-            if not len(c3d_feature) == len(resnet_feature):
-                max_len = min(len(c3d_feature),len(resnet_feature))
-                c3d_feature = c3d_feature[:max_len]
-                resnet_feature = resnet_feature[:max_len]
+                if len(of_res_feature.shape) == 1:
+                    of_res_feature = np.expand_dims(of_res_feature, axis=0)
 
-            if self.layer.lower() == 'fc':
-                video_feature = np.concatenate((c3d_feature, resnet_feature),
+                # mistakenly saved total feature as flattened
+                if self.layer.lower() == 'res5c':
+                    of_res_feature = of_res_feature.reshape([-1, 2048,7,7])
+
+                if not len(of_res_feature) == len(resnet_feature):
+                    max_len = min(len(of_res_feature),len(resnet_feature))
+                    of_res_feature = of_res_feature[:max_len]
+                    resnet_feature = resnet_feature[:max_len]
+
+                if self.layer.lower() == 'pool5':
+                    video_feature = np.concatenate((of_res_feature, resnet_feature),
+                                                    axis=len(of_res_feature.shape)-1)
+                    video_feature = np.expand_dims(video_feature, axis=1)
+                    video_feature = np.expand_dims(video_feature, axis=1)
+                    assert list(video_feature.shape[1:]) == [1, 1, 2048+2048]
+                elif self.layer.lower() == 'res5c':
+                    of_res_feature = np.transpose(of_res_feature.reshape([-1, 2048, 7, 7]), [0,2,3,1])
+                    resnet_feature = np.transpose(resnet_feature.reshape([-1,2048,7,7]), [0, 2, 3, 1])
+                    video_feature = np.concatenate((of_res_feature, resnet_feature),
+                                                axis=len(of_res_feature.shape)-1)
+                    assert list(video_feature.shape[1:]) == [7, 7, 2048+2048]
+
+            else:
+                c3d_feature = np.array(self.feat_h5["c3d"][video_id])
+                resnet_feature = np.array(self.feat_h5["resnet"][video_id])
+                if len(c3d_feature.shape) == 1:
+                    c3d_feature = np.expand_dims(c3d_feature, axis=0)
+
+                if not len(c3d_feature) == len(resnet_feature):
+                    max_len = min(len(c3d_feature),len(resnet_feature))
+                    c3d_feature = c3d_feature[:max_len]
+                    resnet_feature = resnet_feature[:max_len]
+
+                if self.layer.lower() == 'fc':
+                    video_feature = np.concatenate((c3d_feature, resnet_feature),
+                                                    axis=len(c3d_feature.shape)-1)
+                    video_feature = np.expand_dims(video_feature, axis=1)
+                    video_feature = np.expand_dims(video_feature, axis=1)
+                    assert list(video_feature.shape[1:]) == [1, 1, 4096+2048]
+                elif self.layer.lower() == 'conv':
+                    c3d_feature = np.transpose(c3d_feature.reshape([-1,1024,7,7]), [0,2,3,1])
+                    resnet_feature = np.transpose(resnet_feature.reshape([-1,2048,7,7]), [0, 2, 3, 1])
+                    video_feature = np.concatenate((c3d_feature, resnet_feature),
                                                 axis=len(c3d_feature.shape)-1)
-                video_feature = np.expand_dims(video_feature, axis=1)
-                video_feature = np.expand_dims(video_feature, axis=1)
-                assert list(video_feature.shape[1:]) == [1, 1, 4096+2048]
-            elif self.layer.lower() == 'conv':
-                c3d_feature = np.transpose(c3d_feature.reshape([-1,1024,7,7]), [0,2,3,1])
-                resnet_feature = np.transpose(resnet_feature.reshape([-1,2048,7,7]), [0, 2, 3, 1])
-                video_feature = np.concatenate((c3d_feature, resnet_feature),
-                                               axis=len(c3d_feature.shape)-1)
-                assert list(video_feature.shape[1:]) == [7, 7, 1024+2048]
+                    assert list(video_feature.shape[1:]) == [7, 7, 1024+2048]
 
         return video_feature
 
@@ -394,17 +492,29 @@ class DatasetTGIF():
                 return (self.max_length, 7, 7, 2048)
             elif self.layer.lower() == 'pool5':
                 return (self.max_length, 1, 1, 2048)
+        elif self.image_feature_net == 'optflow':
+            assert self.layer.lower() in ['fc1000', 'pool5', 'res5c']
+            if self.layer.lower() == 'res5c':
+                return (self.max_length, 7, 7, 2048)
+            elif self.layer.lower() == 'pool5':
+                return (self.max_length, 1, 1, 2048)
+
         elif self.image_feature_net.lower() == 'c3d':
             if self.layer.lower() == 'fc6':
                 return (self.max_length, 1, 1, 4096)
             elif self.layer.lower() == 'conv5b':
                 return (self.max_length, 7, 7, 1024)
         elif self.image_feature_net.lower() == 'concat':
-            assert self.layer.lower() in ['fc', 'conv']
-            if self.layer.lower() == 'fc':
+            assert self.layer.lower() in ['fc', 'conv','pool5', 'res5c']
+            if self.layer.lower() == 'fc' and self.extracted_feature == 'C3D':
                 return (self.max_length, 1, 1, 4096+2048)
-            elif self.layer.lower() == 'conv':
+            elif self.layer.lower() == 'conv' and self.extracted_feature == 'C3D':
                 return (self.max_length, 7, 7, 1024+2048)
+            elif self.layer.lower() == 'pool5' and self.extracted_feature == 'optflow':
+                return (self.max_length, 1, 1, 2048+2048)
+            elif self.layer.lower() == 'res5c' and self.extracted_feature == 'optflow':
+                return (self.max_length, 7, 7, 2048+2048)
+
 
     def get_video_feature(self, key):
         video_feature = self.load_video_feature(key)
@@ -556,6 +666,7 @@ class DatasetTGIF():
 
             batch_video_feature_convmap[k, :] = data_util.pad_video(
                 video_feature, self.get_video_feature_dimension())
+
             batch_video_mask[k] = video_mask
 
             answer = max(self.get_Count_answer(key), 1)
@@ -698,6 +809,7 @@ class DatasetTGIF():
         for k in xrange(batch_size):
             key = next(self._batch_it)
             chunk.append(key)
+
         if self.data_type == 'FrameQA':
             return self.get_FrameQA_result(chunk)
         # Make custom function to make batch!
@@ -726,8 +838,10 @@ class DatasetTGIF():
                                  max_n_videos=self.max_n_videos,
                                  data_type=self.data_type,
                                 dataframe_dir=self.dataframe_dir,
-                                 vocab_dir=self.vocabulary_dir)
+                                 vocab_dir=self.vocabulary_dir,
+                                 feature=self.extracted_feature)
 
         data_split.ids = self.ids[-int(ratio*len(self.ids)):]
         self.ids = self.ids[:-int(ratio*len(self.ids))]
+
         return data_split

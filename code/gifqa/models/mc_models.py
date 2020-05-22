@@ -2,8 +2,6 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 from mc_base import *
 from util import log
-from tensorflow.python.ops import rnn_cell
-from models.rnn_cell.rnn_cell import BasicLSTMCell_LayerNorm as cell_class
 from ops import *
 import time
 import numpy as np
@@ -34,12 +32,28 @@ class MCC3DEvaluator(MCBaseEvaluator):
 class MCC3DTrainer(MCBaseTrainer):
     pass
 
-class MCConcat(MCBase):
+
+class MCOF(MCBase):
 
     @staticmethod
     def add_flags(FLAGS):
+        FLAGS.image_feature_net = "optflow"
+        FLAGS.layer = "pool5"
+
+class MCOFEvaluator(MCBaseEvaluator):
+    pass
+class MCOFTrainer(MCBaseTrainer):
+    pass
+
+class MCConcat(MCBase):
+    
+    @staticmethod
+    def add_flags(FLAGS):
         FLAGS.image_feature_net = "concat"
-        FLAGS.layer = "fc"
+        if FLAGS.feature == "C3D":
+            FLAGS.layer = "fc"
+        elif FLAGS.feature == "optflow":
+            FLAGS.layer = "pool5"
 
 class MCConcatEvaluator(MCBaseEvaluator):
     pass
@@ -50,8 +64,12 @@ class MCTp(MCBase):
 
     @staticmethod
     def add_flags(FLAGS):
-        FLAGS.image_feature_net = "concat"
-        FLAGS.layer = "fc"
+        if FLAGS.feature == "optflow":
+            FLAGS.image_feature_net = "concat"
+            FLAGS.layer = "pool5"
+        elif FLAGS.feature == "C3D":
+            FLAGS.image_feature_net = "concat"
+            FLAGS.layer = "fc"
 
     def build_graph(self,
                     video,
@@ -59,15 +77,15 @@ class MCTp(MCBase):
                     question,
                     question_mask,
                     answer,
-                    train_flag):
+                    optimizer):
 
 
         self.video = video  # [batch_size, length, kernel, kernel, channel]
         self.video_mask = video_mask  # [batch_size, length]
         self.question = question  # [batch_size, 5, length]
         self.question_mask = question_mask  # [batch_size, 5, length]
-        self.train_flag = train_flag  # boolean
         self.answer = answer
+        self.optimizer = optimizer
 
         # we aggregate (1 video x 5 sentences) into 5 x (1 video, 1 sentence) pairs.
         # then the batch_size dimension increases.
@@ -95,11 +113,7 @@ class MCTp(MCBase):
             self.word_embed_t = tf.get_variable("Word_embed",
                                                 [self.vocabulary_size, self.word_dim],
                                                 initializer=tf.random_normal_initializer(stddev=0.1))
-        self.dropout_keep_prob_cell_input_t = tf.constant(self.dropout_keep_prob_cell_input)
-        self.dropout_keep_prob_cell_output_t = tf.constant(self.dropout_keep_prob_cell_output)
-        self.dropout_keep_prob_fully_connected_t = tf.constant(self.dropout_keep_prob_fully_connected)
-        self.dropout_keep_prob_output_t = tf.constant(self.dropout_keep_prob_output)
-        self.dropout_keep_prob_image_embed_t = tf.constant(self.dropout_keep_prob_image_embed)
+        self.dropout_keep_prob_t = tf.placeholder_with_default(1., [])
 
 
         with tf.variable_scope("conv_image_emb"):
@@ -116,25 +130,8 @@ class MCTp(MCBase):
                                                                  self.lstm_steps,
                                                                  self.channel_size])
             #  [batch_size, length, channel_size]
-            self.embedded_feat_drop = tf.nn.dropout(self.embedded_feat, self.dropout_keep_prob_image_embed_t)
+            self.embedded_feat_drop = tf.nn.dropout(self.embedded_feat, self.dropout_keep_prob_t)
 
-        with tf.variable_scope("video_rnn") as scope:
-            self.video_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            self.vid_initial_state = tf.zeros([self.agg_batch_size, self.video_cell.state_size])
-            self.vid_rnn_states = [self.vid_initial_state]
-
-            for i in range(self.lstm_steps):
-                if i > 0:
-                    scope.reuse_variables()
-                new_output, new_state = self.video_cell(self.embedded_feat_drop[:, i, :],
-                                                        self.vid_rnn_states[-1])
-                self.vid_rnn_states.append(new_state * tf.expand_dims(self.video_mask_agg[:, i], 1))
-
-            self.vid_states = [
-                tf.concat(1, [tf.slice(vid_rnn_state, [0,0], [-1,self.hidden_dim]),
-                              tf.slice(vid_rnn_state, [0,2*self.hidden_dim], [-1,self.hidden_dim])])
-                for vid_rnn_state in self.vid_rnn_states[1:]]
 
         with tf.variable_scope("word_emb"):
             with tf.device("/cpu:0"):
@@ -142,31 +139,37 @@ class MCTp(MCBase):
                 # [batch_size, length, word_dim]
                 self.embedded_start_word = tf.nn.embedding_lookup(self.word_embed_t,
                                                                   tf.ones([self.agg_batch_size], dtype=tf.int32))
-        with tf.variable_scope("caption_rnn") as scope:
-            self.caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            self.cap_initial_state = self.vid_rnn_states[-1]
-            self.cap_rnn_states = [self.cap_initial_state]
 
-            current_embedded_y = self.embedded_start_word
-            for i in range(self.lstm_steps):
-                if i > 0:
-                    scope.reuse_variables()
 
-                new_output, new_state = self.caption_cell(current_embedded_y,
-                                                          self.cap_rnn_states[-1])
-                self.cap_rnn_states.append(new_state)
-                current_embedded_y = self.embedded_captions[:, i, :]
+
+        if self.architecture == "1video2text":
+            self.vid_rnn_states, self.vid_states = self.video_rnn()
+            self.cap_rnn_states = self.cap_rnn(self.vid_rnn_states)
+            self.rnn_states = self.cap_rnn_states
+
+        elif self.architecture == "1text2video":
+            self.cap_rnn_states = self.cap_rnn()
+            self.vid_rnn_states, self.vid_states = self.video_rnn(self.cap_rnn_states)
+            self.rnn_states = self.cap_rnn_states # NOTE: vid_rnn_states here don't train.
+
+        elif self.architecture == "parallel":
+            # both start with 0 states,
+            self.cap_rnn_states = self.cap_rnn()
+            self.vid_rnn_states, self.vid_states = self.video_rnn(self.cap_rnn_states)
+            self.rnn_states = self.cap_rnn_states
+
 
         with tf.variable_scope("merge") as scope:
-            rnn_final_state = tf.concat(1, [
-                tf.slice(self.cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
-                tf.slice(self.cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
+            rnn_final_state = tf.concat([self.rnn_states[-1][0][0], self.rnn_states[-1][1][0]], 1)
+
+            if self.architecture == "parallel":
+                cap_final_state = rnn_final_state
+                vid_final_state = tf.concat([self.vid_rnn_states[-1][0][0], self.vid_rnn_states[-1][1][0]], 1)
+                rnn_final_state = linear(tf.concat([rnn_final_state, vid_final_state], 1), 2*self.hidden_dim, name="final_state_mapping")
 
             vid_att, alpha = self.attention(rnn_final_state, self.vid_states)
             self.alpha = alpha
-            final_embed = tf.add(tf.nn.tanh(linear(vid_att, 2*self.hidden_dim)),
-                                 rnn_final_state)
+            final_embed = tf.add(tf.nn.tanh(linear(vid_att, 2*self.hidden_dim)), rnn_final_state)
 
         with tf.variable_scope("loss") as scope:
             embed_state = tf.contrib.layers.fully_connected(final_embed,
@@ -182,6 +185,13 @@ class MCTp(MCBase):
 
             self.mean_loss = margin_loss
 
+        with tf.variable_scope("gradient") as scope:
+            gs, vs = zip(*self.optimizer.compute_gradients(margin_loss))
+            clipped_gs, _ = tf.clip_by_global_norm(gs, clip_norm=5)
+            self.mean_grad_list.append(zip(clipped_gs, vs))
+            # from IPython import embed; embed()
+            self.mean_grad = average_gradients(self.mean_grad_list) # use this to debug.
+
         with tf.variable_scope("accuracy"):
             # prediction tensor on test phase
             self.predictions = tf.argmax(
@@ -196,18 +206,73 @@ class MCTp(MCBase):
             self.acc = tf.reduce_mean(tf.cast(self.correct_predictions, "float"), name="accuracy")
 
     def attention(self, prev_hidden, vid_states):
-        packed = tf.pack(vid_states)
+        # prev_hidden is output of text encoder.
+        packed = tf.stack(vid_states)
         packed = tf.transpose(packed, [1,0,2])
         vid_2d = tf.reshape(packed, [-1, self.hidden_dim*2])
         sent_2d = tf.tile(prev_hidden, [1, self.lstm_steps])
         sent_2d = tf.reshape(sent_2d, [-1, self.hidden_dim*2])
-        preact = tf.add(linear(sent_2d, self.hidden_dim, name="preatt_sent"),
-                        linear(vid_2d, self.hidden_dim, name="preadd_vid"))
+        preact = tf.add(linear(sent_2d, self.att_hidden_dim, name="preatt_sent"),
+                        linear(vid_2d, self.att_hidden_dim, name="preadd_vid"))
         score = linear(tf.nn.tanh(preact), 1, name="preatt")
         score_2d = tf.reshape(score, [-1, self.lstm_steps])
         alpha = tf.nn.softmax(score_2d)
         alpha_3d = tf.reshape(alpha, [-1, self.lstm_steps, 1])
         return tf.reduce_sum(packed * alpha_3d, 1), alpha
+
+    def video_rnn(self, cap_rnn_states=None):
+        with tf.variable_scope("video_rnn") as scope:
+            self.video_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+
+            if self.architecture == "1video2text" or self.architecture == "parallel":
+                vid_rnn_states = [self.video_cell.zero_state(self.agg_batch_size, tf.float32)]
+            elif self.architecture == "1text2video":
+                vid_rnn_states = [cap_rnn_states[-1]]
+
+            for i in range(self.lstm_steps):
+                if i > 0:
+                    scope.reuse_variables()
+
+                new_output, new_state = self.video_cell(
+                    self.embedded_feat_drop[:, i, :], vid_rnn_states[-1]
+                )
+
+                vid_rnn_states.append(
+                    (
+                    (new_state[0][0]*tf.expand_dims(self.video_mask_agg[:, i], 1), new_state[0][1]*tf.expand_dims(self.video_mask_agg[:, i], 1)), (new_state[1][0]*tf.expand_dims(self.video_mask_agg[:, i], 1), new_state[1][1]*tf.expand_dims(self.video_mask_agg[:, i], 1))
+                    )
+                )
+
+        vid_states = [
+            tf.concat([vid_rnn_state[0][0], vid_rnn_state[1][0]], 1)
+            for vid_rnn_state in vid_rnn_states[1:]
+        ]
+
+        return vid_rnn_states, vid_states
+
+    def cap_rnn(self, vid_rnn_states=None):
+        with tf.variable_scope("caption_rnn") as scope:
+            self.caption_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+
+            if self.architecture == "1video2text":
+                cap_rnn_states = [vid_rnn_states[-1]]
+            elif self.architecture == "1text2video" or self.architecture == "parallel":
+                # set cap-rnn_states to zeros.
+                cap_rnn_states = [self.caption_cell.zero_state(self.agg_batch_size, tf.float32)]
+
+            current_embedded_y = self.embedded_start_word
+            for i in range(self.lstm_steps):
+                if i > 0:
+                    scope.reuse_variables()
+
+                new_output, new_state = self.caption_cell(
+                    current_embedded_y, cap_rnn_states[-1]
+                )
+                cap_rnn_states.append(new_state)
+                current_embedded_y = self.embedded_captions[:, i, :]
+
+        return cap_rnn_states
+
 
 class MCTpEvaluator(MCBaseEvaluator):
     pass
@@ -218,8 +283,13 @@ class MCSp(MCBase):
 
     @staticmethod
     def add_flags(FLAGS):
-        FLAGS.image_feature_net = "concat"
-        FLAGS.layer = "conv"
+        if FLAGS.feature == "optflow":
+            FLAGS.image_feature_net = "concat"
+            FLAGS.layer = "res5c"
+        elif FLAGS.feature == "C3D":
+            FLAGS.image_feature_net = "concat"
+            FLAGS.layer = "conv"
+
 
     def build_graph(self,
                     video,
@@ -227,14 +297,14 @@ class MCSp(MCBase):
                     question,
                     question_mask,
                     answer,
-                    train_flag):
+                    optimizer):
 
         self.video = video  # [batch_size, length, kernel, kernel, channel]
         self.video_mask = video_mask  # [batch_size, length]
         self.question = question  # [batch_size, 5, length]
         self.question_mask = question_mask  # [batch_size, 5, length]
-        self.train_flag = train_flag  # boolean
         self.answer = answer
+        self.optimizer = optimizer
 
         # word embedding and dropout, etc.
         if self.word_embed is not None:
@@ -243,39 +313,38 @@ class MCSp(MCBase):
             self.word_embed_t = tf.get_variable("Word_embed",
                                                 [self.vocabulary_size, self.word_dim],
                                                 initializer=tf.random_normal_initializer(stddev=0.1))
-        self.dropout_keep_prob_cell_input_t = tf.constant(self.dropout_keep_prob_cell_input)
-        self.dropout_keep_prob_cell_output_t = tf.constant(self.dropout_keep_prob_cell_output)
-        self.dropout_keep_prob_fully_connected_t = tf.constant(self.dropout_keep_prob_fully_connected)
-        self.dropout_keep_prob_output_t = tf.constant(self.dropout_keep_prob_output)
-        self.dropout_keep_prob_image_embed_t = tf.constant(self.dropout_keep_prob_image_embed)
+        self.dropout_keep_prob_t = tf.placeholder_with_default(1., [])
 
         self.agg_batch_size = self.batch_size_per_gpu * MULTICHOICE_COUNT
 
-        for idx, device in enumerate(self.devices):
-            with tf.device("/%s" % device):
-                if idx > 0:
-                    tf.get_variable_scope().reuse_variables()
-                from_idx = self.batch_size_per_gpu*idx
+        with tf.variable_scope(tf.get_variable_scope()) as scope:
+            for idx, device in enumerate(self.devices):
+                with tf.device("/%s" % device):
+                    if idx > 0:
+                        tf.get_variable_scope().reuse_variables()
+                    from_idx = self.batch_size_per_gpu*idx
 
-                video = tf.slice(self.video, [from_idx,0,0,0,0],
-                                    [self.batch_size_per_gpu,-1,-1,-1,-1])
-                video_mask = tf.slice(self.video_mask, [from_idx,0],
-                                        [self.batch_size_per_gpu,-1])
-                question = tf.slice(self.question, [from_idx,0,0],
-                                        [self.batch_size_per_gpu,-1,-1])
-                question_mask = tf.slice(self.question_mask, [from_idx,0,0],
+                    video = tf.slice(self.video, [from_idx,0,0,0,0],
+                                        [self.batch_size_per_gpu,-1,-1,-1,-1])
+                    video_mask = tf.slice(self.video_mask, [from_idx,0],
+                                            [self.batch_size_per_gpu,-1])
+                    question = tf.slice(self.question, [from_idx,0,0],
                                             [self.batch_size_per_gpu,-1,-1])
-                answer = tf.slice(self.answer, [from_idx,0],
-                                    [self.batch_size_per_gpu,-1])
+                    question_mask = tf.slice(self.question_mask, [from_idx,0,0],
+                                                [self.batch_size_per_gpu,-1,-1])
+                    answer = tf.slice(self.answer, [from_idx,0],
+                                        [self.batch_size_per_gpu,-1])
 
-                self.build_graph_single_gpu(video, video_mask, question,
-                                            question_mask, answer, idx)
+                    self.build_graph_single_gpu(video, video_mask, question,
+                                                question_mask, answer, idx)
 
-        self.mean_loss = tf.reduce_mean(tf.pack(self.mean_loss_list, axis=0))
-        self.alpha = tf.pack(self.alpha_list, axis=0)
-        self.predictions = tf.pack(self.predictions_list, axis=0)
-        self.correct_predictions = tf.pack(self.correct_predictions_list, axis=1)
-        self.acc = tf.reduce_mean(tf.pack(self.acc_list, axis=0))
+
+        self.mean_loss = tf.reduce_mean(tf.stack(self.mean_loss_list, axis=0))
+        self.mean_grad = average_gradients(self.mean_grad_list)
+        self.alpha = tf.stack(self.alpha_list, axis=0)
+        self.predictions = tf.stack(self.predictions_list, axis=0)
+        self.correct_predictions = tf.stack(self.correct_predictions_list, axis=1)
+        self.acc = tf.reduce_mean(tf.stack(self.acc_list, axis=0))
 
 
     def build_graph_single_gpu(self, video, video_mask, question, question_mask, answer, idx):
@@ -300,24 +369,21 @@ class MCSp(MCBase):
                     self.word_embed_t, tf.ones([self.agg_batch_size], dtype=tf.int32))
 
         with tf.variable_scope("caption_rnn") as scope:
-            caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            cap_initial_state = tf.zeros([self.agg_batch_size, caption_cell.state_size])
-            cap_rnn_states = [cap_initial_state]
+            caption_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+            cap_rnn_states = [caption_cell.zero_state(self.agg_batch_size, tf.float32)]
             current_embedded_y = embedded_start_word
             for i in range(self.lstm_steps):
                 if i > 0:
                     scope.reuse_variables()
 
-                new_output, new_state = caption_cell(current_embedded_y, cap_rnn_states[-1])
+                new_output, new_state = caption_cell(
+                    current_embedded_y, cap_rnn_states[-1]
+                )
                 cap_rnn_states.append(new_state)
                 current_embedded_y = embedded_captions[:, i, :]
 
         with tf.variable_scope("merge_emb") as scope:
-            rnn_final_state1 = tf.concat(1, [
-                tf.slice(cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
-                tf.slice(cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
-
+            rnn_final_state1 = tf.concat([cap_rnn_states[-1][0][0], cap_rnn_states[-1][1][0]], 1)
             fc_sent = linear(rnn_final_state1, 512, name="fc_sent")
             fc_sent_tiled = tf.tile(fc_sent, [1, self.lstm_steps*7*7])
             fc_sent_tiled = tf.reshape(fc_sent_tiled, [-1, 512])
@@ -343,47 +409,51 @@ class MCSp(MCBase):
 
             #  [batch_size, length, channel_size]
             embedded_feat_drop = tf.nn.dropout(
-                embedded_feat, self.dropout_keep_prob_image_embed_t)
+                embedded_feat, self.dropout_keep_prob_t)
 
         with tf.variable_scope("video_rnn") as scope:
-            video_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            vid_initial_state = tf.zeros([self.agg_batch_size, video_cell.state_size])
-            vid_rnn_states = [vid_initial_state]
+            video_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+            vid_rnn_states = [video_cell.zero_state(self.agg_batch_size, tf.float32)]
+
             for i in range(self.lstm_steps):
                 if i > 0:
                     scope.reuse_variables()
-                new_output, new_state = video_cell(embedded_feat_drop[:, i, :],
-                                                   vid_rnn_states[-1])
-                vid_rnn_states.append(new_state * tf.expand_dims(video_mask_agg[:, i], 1))
+                new_output, new_state = video_cell(
+                    embedded_feat_drop[:, i, :], vid_rnn_states[-1]
+                )
+                vid_rnn_states.append(
+                    (
+                        (new_state[0][0]*tf.expand_dims(video_mask_agg[:, i], 1),
+                        new_state[0][1]*tf.expand_dims(video_mask_agg[:, i], 1)),
+                        (new_state[1][0]*tf.expand_dims(video_mask_agg[:, i], 1),
+                        new_state[1][1]*tf.expand_dims(video_mask_agg[:, i], 1))
+                    )
+                )
 
             vid_states = [
-                tf.concat(1, [tf.slice(vid_rnn_state, [0,0], [-1,self.hidden_dim]),
-                              tf.slice(vid_rnn_state, [0,2*self.hidden_dim], [-1,self.hidden_dim])])
-                for vid_rnn_state in vid_rnn_states[1:]]
+                tf.concat([vid_rnn_state[0][0], vid_rnn_state[1][0]], 1)
+                for vid_rnn_state in vid_rnn_states[1:]
+            ]
 
         with tf.variable_scope("caption_rnn") as scope:
             scope.reuse_variables()
-            caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            cap_initial_state = vid_rnn_states[-1]
-            cap_rnn_states = [cap_initial_state]
-
+            caption_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+            cap_rnn_states = [vid_rnn_states[-1]]
             current_embedded_y = embedded_start_word
+
             for i in range(self.lstm_steps):
                 if i > 0:
                     scope.reuse_variables()
 
-                new_output, new_state = caption_cell(current_embedded_y, cap_rnn_states[-1])
-
+                new_output, new_state = caption_cell(
+                    current_embedded_y, cap_rnn_states[-1]
+                )
                 cap_rnn_states.append(new_state)
                 current_embedded_y = embedded_captions[:, i, :]
 
 
         with tf.variable_scope("loss") as scope:
-            rnn_final_state = tf.concat(1, [
-                tf.slice(cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
-                tf.slice(cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
+            rnn_final_state = tf.concat([cap_rnn_states[-1][0][0], cap_rnn_states[-1][1][0]], 1)
 
             embed_state = tf.contrib.layers.fully_connected(rnn_final_state,
                                                             self.hidden_dim, scope='embed_state')
@@ -399,6 +469,12 @@ class MCSp(MCBase):
             margin_loss = tf.reduce_sum(margin_loss) / self.batch_size_per_gpu
 
             self.mean_loss_list.append(margin_loss)
+
+        with tf.variable_scope("gradient") as scope:
+            gs, vs = zip(*self.optimizer.compute_gradients(margin_loss))
+            clipped_gs, _ = tf.clip_by_global_norm(gs, clip_norm=5)
+            self.mean_grad_list.append(zip(clipped_gs, vs))
+
 
 
         with tf.variable_scope("accuracy"):
@@ -428,8 +504,13 @@ class MCSpTp(MCBase):
 
     @staticmethod
     def add_flags(FLAGS):
-        FLAGS.image_feature_net = "concat"
-        FLAGS.layer = "conv"
+        if FLAGS.feature == "optflow":
+            FLAGS.image_feature_net = "concat"
+            FLAGS.layer = "res5c"
+        elif FLAGS.feature == "C3D":
+            FLAGS.image_feature_net = "concat"
+            FLAGS.layer = "conv"
+
 
     def build_graph(self,
                     video,
@@ -437,15 +518,15 @@ class MCSpTp(MCBase):
                     question,
                     question_mask,
                     answer,
-                    train_flag):
+                    optimizer):
 
 
         self.video = video  # [batch_size, length, kernel, kernel, channel]
         self.video_mask = video_mask  # [batch_size, length]
         self.question = question  # [batch_size, 5, length]
         self.question_mask = question_mask  # [batch_size, 5, length]
-        self.train_flag = train_flag  # boolean
         self.answer = answer
+        self.optimizer = optimizer
 
 
         # word embedding and dropout, etc.
@@ -455,39 +536,37 @@ class MCSpTp(MCBase):
             self.word_embed_t = tf.get_variable("Word_embed",
                                                 [self.vocabulary_size, self.word_dim],
                                                 initializer=tf.random_normal_initializer(stddev=0.1))
-        self.dropout_keep_prob_cell_input_t = tf.constant(self.dropout_keep_prob_cell_input)
-        self.dropout_keep_prob_cell_output_t = tf.constant(self.dropout_keep_prob_cell_output)
-        self.dropout_keep_prob_fully_connected_t = tf.constant(self.dropout_keep_prob_fully_connected)
-        self.dropout_keep_prob_output_t = tf.constant(self.dropout_keep_prob_output)
-        self.dropout_keep_prob_image_embed_t = tf.constant(self.dropout_keep_prob_image_embed)
+        self.dropout_keep_prob_t = tf.placeholder_with_default(1., [])
 
         self.agg_batch_size = self.batch_size_per_gpu * MULTICHOICE_COUNT
 
-        for idx, device in enumerate(self.devices):
-            with tf.device("/%s" % device):
-                if idx > 0:
-                    tf.get_variable_scope().reuse_variables()
-                from_idx = self.batch_size_per_gpu*idx
+        with tf.variable_scope(tf.get_variable_scope()) as scope:
+            for idx, device in enumerate(self.devices):
+                with tf.device("/%s" % device):
+                    if idx > 0:
+                        tf.get_variable_scope().reuse_variables()
+                    from_idx = self.batch_size_per_gpu*idx
 
-                video = tf.slice(self.video, [from_idx,0,0,0,0],
-                                    [self.batch_size_per_gpu,-1,-1,-1,-1])
-                video_mask = tf.slice(self.video_mask, [from_idx,0],
-                                        [self.batch_size_per_gpu,-1])
-                question = tf.slice(self.question, [from_idx,0,0],
-                                        [self.batch_size_per_gpu,-1,-1])
-                question_mask = tf.slice(self.question_mask, [from_idx,0,0],
+                    video = tf.slice(self.video, [from_idx,0,0,0,0],
+                                        [self.batch_size_per_gpu,-1,-1,-1,-1])
+                    video_mask = tf.slice(self.video_mask, [from_idx,0],
+                                            [self.batch_size_per_gpu,-1])
+                    question = tf.slice(self.question, [from_idx,0,0],
                                             [self.batch_size_per_gpu,-1,-1])
-                answer = tf.slice(self.answer, [from_idx,0],
-                                    [self.batch_size_per_gpu,-1])
+                    question_mask = tf.slice(self.question_mask, [from_idx,0,0],
+                                                [self.batch_size_per_gpu,-1,-1])
+                    answer = tf.slice(self.answer, [from_idx,0],
+                                        [self.batch_size_per_gpu,-1])
 
-                self.build_graph_single_gpu(video, video_mask, question,
-                                            question_mask, answer, idx)
+                    self.build_graph_single_gpu(video, video_mask, question,
+                                                question_mask, answer, idx)
 
-        self.mean_loss = tf.reduce_mean(tf.pack(self.mean_loss_list, axis=0))
-        self.alpha = tf.pack(self.alpha_list, axis=0)
-        self.predictions = tf.pack(self.predictions_list, axis=0)
-        self.correct_predictions = tf.pack(self.correct_predictions_list, axis=0)
-        self.acc = tf.reduce_mean(tf.pack(self.acc_list, axis=0))
+        self.mean_loss = tf.reduce_mean(tf.stack(self.mean_loss_list, axis=0))
+        self.mean_grad = average_gradients(self.mean_grad_list)
+        self.alpha = tf.stack(self.alpha_list, axis=0)
+        self.predictions = tf.stack(self.predictions_list, axis=0)
+        self.correct_predictions = tf.stack(self.correct_predictions_list, axis=0)
+        self.acc = tf.reduce_mean(tf.stack(self.acc_list, axis=0))
 
 
     def build_graph_single_gpu(self, video, video_mask, question, question_mask, answer, idx):
@@ -512,10 +591,10 @@ class MCSpTp(MCBase):
                     self.word_embed_t, tf.ones([self.agg_batch_size], dtype=tf.int32))
 
         with tf.variable_scope("caption_rnn") as scope:
-            caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            cap_initial_state = tf.zeros([self.agg_batch_size, caption_cell.state_size])
-            cap_rnn_states = [cap_initial_state]
+            caption_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+            cap_rnn_states = [caption_cell.zero_state(self.agg_batch_size, tf.float32)]
             current_embedded_y = embedded_start_word
+
             for i in range(self.lstm_steps):
                 if i > 0:
                     scope.reuse_variables()
@@ -528,9 +607,7 @@ class MCSpTp(MCBase):
 
         def spatio_att():
             with tf.variable_scope("merge_emb") as scope:
-                rnn_final_state1 = tf.concat(1, [
-                    tf.slice(cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
-                    tf.slice(cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
+                rnn_final_state1 = tf.concat([cap_rnn_states[-1][0][0], cap_rnn_states[-1][1][0]], 1)
 
                 fc_sent = linear(rnn_final_state1, 512, name="fc_sent")
                 fc_sent_tiled = tf.tile(fc_sent, [1, self.lstm_steps*7*7])
@@ -559,46 +636,47 @@ class MCSpTp(MCBase):
 
             #  [batch_size, length, channel_size]
             embedded_feat_drop = tf.nn.dropout(
-                embedded_feat, self.dropout_keep_prob_image_embed_t)
+                embedded_feat, self.dropout_keep_prob_t)
 
         with tf.variable_scope("video_rnn") as scope:
-            video_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            vid_initial_state = tf.zeros([self.agg_batch_size, video_cell.state_size])
-            vid_rnn_states = [vid_initial_state]
+            video_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+            vid_rnn_states = [video_cell.zero_state(self.agg_batch_size, tf.float32)]
+
             for i in range(self.lstm_steps):
                 if i > 0:
                     scope.reuse_variables()
-                new_output, new_state = video_cell(embedded_feat_drop[:, i, :],
-                                                   vid_rnn_states[-1])
-                vid_rnn_states.append(new_state * tf.expand_dims(video_mask_agg[:, i], 1))
+                new_output, new_state = video_cell(
+                    embedded_feat_drop[:, i, :], vid_rnn_states[-1]
+                )
+                vid_rnn_states.append(
+                    (
+                        (new_state[0][0]*tf.expand_dims(video_mask_agg[:, i], 1),
+                        new_state[0][1]*tf.expand_dims(video_mask_agg[:, i], 1)),
+                        (new_state[1][0]*tf.expand_dims(video_mask_agg[:, i], 1),
+                        new_state[1][1]*tf.expand_dims(video_mask_agg[:, i], 1))
+                    )
+                )
 
             vid_states = [
-                tf.concat(1, [tf.slice(vid_rnn_state, [0,0], [-1,self.hidden_dim]),
-                              tf.slice(vid_rnn_state, [0,2*self.hidden_dim], [-1,self.hidden_dim])])
-                for vid_rnn_state in vid_rnn_states[1:]]
+                tf.concat([vid_rnn_state[0][0], vid_rnn_state[1][0]], 1)
+                for vid_rnn_state in vid_rnn_states[1:]
+            ]
 
         with tf.variable_scope("caption_rnn") as scope:
             scope.reuse_variables()
-            caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            cap_initial_state = vid_rnn_states[-1]
-            cap_rnn_states = [cap_initial_state]
-
+            caption_cell = MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
+            cap_rnn_states = [vid_rnn_states[-1]]
             current_embedded_y = embedded_start_word
 
             for i in range(self.lstm_steps):
                 if i > 0:
                     scope.reuse_variables()
-
                 new_output, new_state = caption_cell(current_embedded_y, cap_rnn_states[-1])
                 cap_rnn_states.append(new_state)
                 current_embedded_y = embedded_captions[:, i, :]
 
         with tf.variable_scope("merge") as scope:
-            rnn_final_state = tf.concat(1, [
-                tf.slice(cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
-                tf.slice(cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
+            rnn_final_state = tf.concat([cap_rnn_states[-1][0][0], cap_rnn_states[-1][1][0]], 1)
             vid_att, alpha = self.attention(rnn_final_state, vid_states)
             final_embed = tf.add(tf.nn.tanh(linear(vid_att, 2*self.hidden_dim)),
                                  rnn_final_state)
@@ -621,6 +699,11 @@ class MCSpTp(MCBase):
 
             self.mean_loss_list.append(margin_loss)
 
+        with tf.variable_scope("gradient") as scope:
+            gs, vs = zip(*self.optimizer.compute_gradients(margin_loss))
+            clipped_gs, _ = tf.clip_by_global_norm(gs, clip_norm=5)
+            self.mean_grad_list.append(zip(clipped_gs, vs))
+
 
         with tf.variable_scope("accuracy"):
             # prediction tensor on test phase
@@ -640,7 +723,7 @@ class MCSpTp(MCBase):
             self.acc_list.append(acc)
 
     def attention(self, prev_hidden, vid_states):
-        packed = tf.pack(vid_states)
+        packed = tf.stack(vid_states)
         packed = tf.transpose(packed, [1,0,2])
         vid_2d = tf.reshape(packed, [-1, self.hidden_dim*2])
         sent_2d = tf.tile(prev_hidden, [1, self.lstm_steps])

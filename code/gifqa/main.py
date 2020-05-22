@@ -12,31 +12,32 @@ from models.frameqa_models import *
 from models.mc_models import *
 
 # Training Params
-tf.flags.DEFINE_string("vc_dir", "../dataset/tgif/Vocabulary", "vc path")
-tf.flags.DEFINE_string("df_dir", "../dataset/tgif/DataFrame", "df path")
+tf.flags.DEFINE_string("vc_dir", "../../dataset", "vocabulary(vc) path")
+tf.flags.DEFINE_string("df_dir", "../../dataset", "df path")
 tf.flags.DEFINE_string("task", "Trans", "[Count, Action, FrameQA, Trans]")
-tf.flags.DEFINE_string("name", "Tp", "[C3D, Resnet, Concat, Tp, Sp, SpTp]")
+tf.flags.DEFINE_string("name", "Tp", "[C3D, Resnet, Concat, Tp, Sp, SpTp, OF]")
+tf.flags.DEFINE_string("feature", "optflow", "[C3D, optflow]")
+tf.flags.DEFINE_string("embedding_type", "fasttext", "[glove, fasttext]")
 tf.flags.DEFINE_string("save_path", "./", "Save path")
-tf.flags.DEFINE_integer("random_state", 42, "Random state initialization for reproductibility")
+tf.flags.DEFINE_string("architecture", "1video2text", "[1text2video,1video2text,parallel]")
+tf.flags.DEFINE_integer("random_state", 42, "Random state initialization for reproducibility")
 tf.flags.DEFINE_integer("max_sequence_length", 35, "Examples will be padded/truncated to this length")
-tf.flags.DEFINE_integer("num_epochs", 300, "Number of training epochs")
-tf.flags.DEFINE_integer("log_every", 25, "Number of step size for training log")
-tf.flags.DEFINE_integer("evaluate_every", 100, "Evaluate model on dev set after this number of steps")
+tf.flags.DEFINE_integer("num_epochs", 1000, "Number of training epochs")
+tf.flags.DEFINE_integer("log_every", 100, "Number of step size for training log")
+tf.flags.DEFINE_integer("evaluate_every", 500, "Evaluate model on dev set after this number of steps")
 tf.flags.DEFINE_boolean("save_checkpoint_by_param", True, "checkpoint dir save as param")
 tf.flags.DEFINE_float("learning_rate", 0.001, "learning rate for training")
 
-tf.flags.DEFINE_integer("hidden_dim", 512, "rnn hidden unit dimension")
-tf.flags.DEFINE_integer("batch_size", 64, "Batch_size")
-tf.flags.DEFINE_integer("num_layers", 2, "Number of stacked video RNN cells")
-tf.flags.DEFINE_float("dropout_keep_prob_cell_input", 0.8, "RNN cell input connection dropout")
-tf.flags.DEFINE_float("dropout_keep_prob_cell_output", 0.8, "RNN cell output connection dropout")
-tf.flags.DEFINE_float("dropout_keep_prob_fully_connected", 0.8, "fully_connected output dropout")
-tf.flags.DEFINE_float("dropout_keep_prob_output", 0.8, "Output layer dropout")
-tf.flags.DEFINE_float("dropout_keep_prob_image_embed", 0.8, "image embedding dropout")
+tf.flags.DEFINE_integer("hidden_dim", 512, "rnn hidden unit dimension[256, default 512, 1024]")
+tf.flags.DEFINE_integer("att_hidden_dim", 512, "attention hidden unit dimension[256, default 512, 1024]")
+tf.flags.DEFINE_integer("batch_size", 64, "Batch_size, default:64")
+tf.flags.DEFINE_integer("num_layers", 2, "Number of stacked video RNN cells[1,2,3]")
+tf.flags.DEFINE_float("dropout_keep_prob", 0.8, "dropout")
 
 # Test configurations
 tf.flags.DEFINE_string("checkpoint_path", "", "Path for checkpoint diretory you want to recover.")
 tf.flags.DEFINE_boolean("test_phase", False, "use test set instead of validation set")
+tf.flags.DEFINE_boolean("generate_results", False, "Generate json files for redrawing attention")
 
 # Session Parameters
 tf.flags.DEFINE_boolean("allow_soft_placement", True, "Allow soft device placement(e.g. no GPU)")
@@ -81,7 +82,9 @@ train_dataset = DatasetTGIF(dataset_name='train',
                                          max_length=FLAGS.max_sequence_length,
                                          data_type=FLAGS.task,
                                          dataframe_dir=FLAGS.df_dir,
-                                         vocab_dir=FLAGS.vc_dir)
+                                         vocab_dir=FLAGS.vc_dir,
+                                         feature=FLAGS.feature,
+                                         embedding_type=FLAGS.embedding_type)
 train_dataset.load_word_vocabulary()
 
 val_dataset = train_dataset.split_dataset(ratio=0.1)
@@ -93,7 +96,9 @@ test_dataset = DatasetTGIF(dataset_name='test',
                             max_length=FLAGS.max_sequence_length,
                             data_type=FLAGS.task,
                             dataframe_dir=FLAGS.df_dir,
-                            vocab_dir=FLAGS.vc_dir)
+                            vocab_dir=FLAGS.vc_dir,
+                            feature=FLAGS.feature,
+                            embedding_type=FLAGS.embedding_type)
 
 test_dataset.share_word_vocabulary_from(train_dataset)
 
@@ -140,30 +145,35 @@ def main():
 
     global checkpoint_file
     checkpoint_file = os.path.join(checkpoint_dir, "model.ckpt")
-    saver = tf.train.Saver(max_to_keep=10000)
 
     # Initialization, optionally load from checkpoint
     if FLAGS.checkpoint_path:
+        saver = tf.train.import_meta_graph(FLAGS.checkpoint_path + '.meta')
         checkpoint = FLAGS.checkpoint_path
         if checkpoint:
             log.info("Restoring checkpoint from {}".format(checkpoint))
             saver.restore(sess, checkpoint)
             log.info("Restored checkpoint from {}".format(checkpoint))
+            # initialize global_step since saver will not.
+            trainer.global_step.initializer.run()
     else:
-        sess.run(tf.initialize_all_variables())
+        saver = tf.train.Saver(max_to_keep=10000)
+        sess.run(tf.global_variables_initializer())
 
     def run_evaluation(current_step):
         global checkpoint_file
         if FLAGS.test_phase:
+            test_size = len(test_dataset.ids)
             dev_iter = test_dataset.batch_iter(1, FLAGS.batch_size, shuffle=False)
         else:
+            test_size = len(val_dataset.ids)
             dev_iter = val_dataset.batch_iter(1, FLAGS.batch_size, shuffle=False)
 
         mean_loss, acc, _, result_json = evaluator.eval(
             dev_iter,
-            test_size=len(test_dataset.ids),
+            test_size=test_size,
             global_step=trainer.global_step,
-            generate_results=FLAGS.test_phase)
+            generate_results=FLAGS.generate_results)
 
         log.info((" [{split_mode:5} step {step:4d}] " +
                   "Dev mean_loss: {mean_loss:.5f}, " +
@@ -194,9 +204,6 @@ def main():
 
     if FLAGS.test_phase:
         log.infov("Evaluation mode! use --test_phase")
-        train_loss, train_acc, current_step, time_delta = next(trainer.train_loop(train_iter))
-        current_step = sess.run(trainer.global_step)
-        log.info("Sample training step %d: loss = %.5f, acc = %.5f", current_step, train_loss, train_acc)
 
         # Ensure parameter restoration
         from tensorflow.python import pywrap_tensorflow
@@ -205,10 +212,11 @@ def main():
 
         tvars = tf.trainable_variables()
         for v in tvars:
+            # print "name of variable to call: ", v.name[:-2]
             v_in_cp = reader.get_tensor(v.name[:-2])
             sess.run(tf.assign(v, v_in_cp))
 
-        run_evaluation(current_step)
+        run_evaluation(0) # feed 0 just for the first time test
         return
 
     for train_loss, train_acc, current_step, time_delta in trainer.train_loop(train_iter):
@@ -231,7 +239,10 @@ def main():
 def init_model():
     task = FLAGS.task
 
-    model_params = {"feat_dim": FEAT_DIM, "word_embed": train_dataset.word_matrix, "lstm_steps": SEQUENCE_LENGTH}
+    model_params = {"feat_dim": FEAT_DIM,
+                    "word_embed": train_dataset.word_matrix,
+                    "lstm_steps": SEQUENCE_LENGTH,
+                    "architecture": FLAGS.architecture}
     if task == 'FrameQA':
         model_params["vocabulary_size"] = len(train_dataset.idx2word)
         model_params["answer_size"] = len(train_dataset.idx2ans)
@@ -243,13 +254,9 @@ def init_model():
         params_path = os.path.join(os.path.dirname(checkpoint), '%s_%s_param.hkl' % (FLAGS.task.lower(), FLAGS.name.lower()))
         log.info("Restored parameter set from {}".format(params_path))
         model_params = hkl.load(open(params_path))
+        model_params["att_hidden_dim"] = FLAGS.att_hidden_dim
+        model_params["hidden_dim"] = FLAGS.hidden_dim
 
-    if FLAGS.test_phase:
-        model_params["dropout_keep_prob_cell_input"] = 1.
-        model_params["dropout_keep_prob_cell_output"] = 1.
-        model_params["dropout_keep_prob_fully_connected"] = 1.
-        model_params["dropout_keep_prob_output"] = 1.
-        model_params["dropout_keep_prob_image_embed"] = 1.
 
     model = Model.from_dict(model_params)
     model.print_params()
@@ -257,7 +264,6 @@ def init_model():
     video = tf.placeholder(tf.float32, [FLAGS.batch_size] + list(train_dataset.get_video_feature_dimension()))
     video_mask = tf.placeholder(tf.float32, [FLAGS.batch_size, SEQUENCE_LENGTH])
     answer = tf.placeholder(tf.int32, [FLAGS.batch_size, 1])
-    train_flag = tf.placeholder(tf.bool)
 
     if (task == 'Count') or (task == 'FrameQA'):
         question = tf.placeholder(tf.int32, [FLAGS.batch_size, SEQUENCE_LENGTH])
@@ -266,7 +272,8 @@ def init_model():
         question = tf.placeholder(tf.int32, [FLAGS.batch_size, Model.MULTICHOICE_COUNT, SEQUENCE_LENGTH])
         question_mask = tf.placeholder(tf.float32, [FLAGS.batch_size, Model.MULTICHOICE_COUNT, SEQUENCE_LENGTH])
 
-    model.build_graph(video, video_mask, question, question_mask, answer, train_flag)
+    model.build_graph(video, video_mask, question, question_mask, answer, optimizer=tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate))
+
     return model, model_params
 
 if __name__ == '__main__':

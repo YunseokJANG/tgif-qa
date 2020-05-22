@@ -2,8 +2,8 @@ import tensorflow as tf
 from tensorflow.python.client import device_lib
 from model_saver import ModelSaver
 from util import log
-from tensorflow.python.ops import rnn_cell
-from models.rnn_cell.rnn_cell import BasicLSTMCell_LayerNorm as cell_class
+import tensorflow.contrib.rnn as rnn
+from rnn_cell.custom_rnn_cell import LayerNormBasicLSTMCell, MultiRNNCell
 from ops import *
 
 import time
@@ -19,11 +19,9 @@ class CountBase(ModelSaver):
         "word_embed",
         "num_layers",
         "name",
-        "dropout_keep_prob_cell_input",
-        "dropout_keep_prob_cell_output",
-        "dropout_keep_prob_fully_connected",
-        "dropout_keep_prob_output",
-        "dropout_keep_prob_image_embed"
+        "dropout_keep_prob",
+        "architecture",
+        "att_hidden_dim",
     ]
 
     def __init__(self,
@@ -34,13 +32,12 @@ class CountBase(ModelSaver):
                  batch_size=100,
                  num_layers=2,
                  name="Count",
-                 dropout_keep_prob_cell_input=1.0,
-                 dropout_keep_prob_cell_output=1.0,
-                 dropout_keep_prob_fully_connected=1.0,
-                 dropout_keep_prob_output=1.0,
-                 dropout_keep_prob_image_embed=1.0,
+                 dropout_keep_prob=0.8,
                  vocabulary_size=12000,
-                 word_dim=300):
+                 word_dim=300,
+                 architecture="1video2text",
+                 att_hidden_dim=512):
+
 
         self.name = name
         self.word_embed = word_embed
@@ -51,15 +48,12 @@ class CountBase(ModelSaver):
             self.vocabulary_size = vocabulary_size
             self.word_dim = word_dim
         self.hidden_dim = hidden_dim
+        self.att_hidden_dim = att_hidden_dim
         self.lstm_steps = lstm_steps
         self.feat_dim = feat_dim
         self.batch_size = batch_size
         self.num_layers = num_layers
-        self.dropout_keep_prob_cell_input = dropout_keep_prob_cell_input
-        self.dropout_keep_prob_cell_output = dropout_keep_prob_cell_output
-        self.dropout_keep_prob_fully_connected = dropout_keep_prob_fully_connected
-        self.dropout_keep_prob_output = dropout_keep_prob_output
-        self.dropout_keep_prob_image_embed = dropout_keep_prob_image_embed
+        self.dropout_keep_prob = dropout_keep_prob
 
 
         self.feat_dims_arr = self.feat_dim
@@ -73,10 +67,12 @@ class CountBase(ModelSaver):
         self.devices = [x.name for x in device_lib.list_local_devices() if x.device_type == 'GPU']
         self.batch_size_per_gpu = batch_size/len(self.devices)
         self.mean_loss_list = []
+        self.mean_grad_list = []
         self.eval_loss_list = []
         self.alpha_list = []
         self.predictions_list = []
         self.correct_predictions_list = []
+        self.architecture = architecture
         self.acc_list = []
 
 
@@ -101,15 +97,15 @@ class CountBase(ModelSaver):
                     question,
                     question_mask,
                     answer,
-                    train_flag):
+                    optimizer):
 
 
         self.video = video  # [batch_size, length, kernel, kernel, channel]
         self.video_mask = video_mask  # [batch_size, length]
         self.caption = question
         self.caption_mask = question_mask  # [batch_size, length]
-        self.train_flag = train_flag  # boolean
         self.answer = answer
+        self.optimizer = optimizer
 
 
         # word embedding and dropout, etc.
@@ -119,11 +115,7 @@ class CountBase(ModelSaver):
             self.word_embed_t = tf.get_variable("Word_embed",
                                                 [self.vocabulary_size, self.word_dim],
                                                 initializer=tf.random_normal_initializer(stddev=0.1))
-        self.dropout_keep_prob_cell_input_t = tf.constant(self.dropout_keep_prob_cell_input)
-        self.dropout_keep_prob_cell_output_t = tf.constant(self.dropout_keep_prob_cell_output)
-        self.dropout_keep_prob_fully_connected_t = tf.constant(self.dropout_keep_prob_fully_connected)
-        self.dropout_keep_prob_output_t = tf.constant(self.dropout_keep_prob_output)
-        self.dropout_keep_prob_image_embed_t = tf.constant(self.dropout_keep_prob_image_embed)
+        self.dropout_keep_prob_t = tf.placeholder_with_default(1., [])
 
 
         with tf.variable_scope("conv_image_emb"):
@@ -140,26 +132,8 @@ class CountBase(ModelSaver):
                                                                  self.lstm_steps,
                                                                  self.channel_size])
             #  [batch_size, length, channel_size]
-            self.embedded_feat_drop = tf.nn.dropout(self.embedded_feat, self.dropout_keep_prob_image_embed_t)
+            self.embedded_feat_drop = tf.nn.dropout(self.embedded_feat, self.dropout_keep_prob_t)
 
-        with tf.variable_scope("video_rnn") as scope:
-            self.video_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            self.vid_initial_state = tf.zeros([self.batch_size, self.video_cell.state_size])
-            self.vid_rnn_states = [self.vid_initial_state]
-
-            for i in range(self.lstm_steps):
-                if i > 0:
-                    scope.reuse_variables()
-                new_output, new_state = self.video_cell(self.embedded_feat_drop[:, i, :],
-                                                        self.vid_rnn_states[-1])
-                self.vid_rnn_states.append(new_state * tf.expand_dims(self.video_mask[:, i], 1))
-
-
-            self.vid_states = [
-                tf.concat(1, [tf.slice(vid_rnn_state, [0,0], [-1,self.hidden_dim]),
-                              tf.slice(vid_rnn_state, [0,2*self.hidden_dim], [-1,self.hidden_dim])])
-                for vid_rnn_state in self.vid_rnn_states[1:]]
 
         with tf.variable_scope("word_emb"):
             with tf.device("/cpu:0"):
@@ -167,26 +141,33 @@ class CountBase(ModelSaver):
                 # [batch_size, length, word_dim]
                 self.embedded_start_word = tf.nn.embedding_lookup(self.word_embed_t,
                                                                   tf.ones([self.batch_size], dtype=tf.int32))
-        with tf.variable_scope("caption_rnn") as scope:
-            self.caption_cell = rnn_cell.MultiRNNCell([self.get_rnn_cell()] * self.num_layers)
-            # Build the recurrence.
-            self.cap_initial_state = self.vid_rnn_states[-1]
-            self.cap_rnn_states = [self.cap_initial_state]
 
-            current_embedded_y = self.embedded_start_word
-            for i in range(self.lstm_steps):
-                if i > 0:
-                    scope.reuse_variables()
+        if self.architecture == "1video2text":
+            vid_rnn_states = self.video_rnn()
+            cap_rnn_states = self.cap_rnn(vid_rnn_states)
+            rnn_states = cap_rnn_states
 
-                new_output, new_state = self.caption_cell(current_embedded_y,
-                                                          self.cap_rnn_states[-1])
-                self.cap_rnn_states.append(new_state)
-                current_embedded_y = self.embedded_captions[:, i, :]
+        elif self.architecture == "1text2video":
+            cap_rnn_states = self.cap_rnn()
+            vid_rnn_states = self.video_rnn(cap_rnn_states)
+            rnn_states = vid_rnn_states
+
+        elif self.architecture == "parallel":
+            # both start with 0 states,
+            cap_rnn_states = self.cap_rnn()
+            vid_rnn_states = self.video_rnn(cap_rnn_states)
+            rnn_states = cap_rnn_states
 
         with tf.variable_scope("loss") as scope:
-            rnn_final_state = tf.concat(1, [
-                tf.slice(self.cap_rnn_states[-1], [0,0], [-1,self.hidden_dim]),
-                tf.slice(self.cap_rnn_states[-1], [0,2*self.hidden_dim], [-1,self.hidden_dim])])
+            rnn_final_state = tf.concat([rnn_states[-1][0][0], rnn_states[-1][1][0]], 1)
+            if self.architecture == "parallel":
+                cap_final_state = rnn_final_state
+                vid_final_state = tf.concat([vid_rnn_states[-1][0][0], vid_rnn_states[-1][1][0]], 1)
+                # concat the two states and add it to vid_att
+                final_embed = linear(tf.concat([rnn_final_state, vid_final_state], 1), 2*self.hidden_dim, name="final_state_mapping")
+            else:
+                final_embed = rnn_final_state
+
             rnnW = tf.get_variable(
                 "W",
                 [2*self.hidden_dim, 1],
@@ -195,20 +176,24 @@ class CountBase(ModelSaver):
                 "b",
                 [1],
                 initializer=tf.constant_initializer(0.0))
-            logits = tf.nn.xw_plus_b(rnn_final_state,rnnW,rnnb)
-
-
+            logits = tf.nn.xw_plus_b(final_embed,rnnW,rnnb)
             self.logits = logits
 
         # prediction tensor on test phase
         self.predictions = tf.cast(tf.clip_by_value(tf.round(logits), 1, 10), tf.int64)
 
-        self.mean_loss = tf.reduce_mean(tf.square(tf.sub(
+        self.mean_loss = tf.reduce_mean(tf.square(tf.subtract(
                 tf.cast(self.logits, tf.float32), tf.cast(self.answer, tf.float32))))
 
-        self.eval_loss = tf.reduce_mean(tf.square(tf.sub(
+        self.eval_loss = tf.reduce_mean(tf.square(tf.subtract(
                 tf.cast(self.predictions, tf.float32), tf.cast(self.answer, tf.float32))))
 
+        with tf.variable_scope("gradient") as scope:
+            gs, vs = zip(*self.optimizer.compute_gradients(self.mean_loss))
+            clipped_gs, _ = tf.clip_by_global_norm(gs, clip_norm=5)
+            self.mean_grad_list.append(zip(clipped_gs, vs))
+            # from IPython import embed; embed()
+            self.mean_grad = average_gradients(self.mean_grad_list) # use this to debug.
 
         with tf.variable_scope("accuracy"):
             self.correct_predictions = tf.cast(tf.equal(
@@ -217,10 +202,60 @@ class CountBase(ModelSaver):
             self.acc = tf.reduce_mean(tf.cast(self.correct_predictions, "float"), name="accuracy")
 
     def get_rnn_cell(self):
-        return rnn_cell.DropoutWrapper(
-            cell_class(self.hidden_dim),
-            input_keep_prob=self.dropout_keep_prob_cell_input_t,
-            output_keep_prob=self.dropout_keep_prob_cell_output_t)
+        return rnn.DropoutWrapper(
+            LayerNormBasicLSTMCell(self.hidden_dim),
+            input_keep_prob=self.dropout_keep_prob_t,
+            output_keep_prob=self.dropout_keep_prob_t)
+
+    def video_rnn(self, cap_rnn_states=None):
+        with tf.variable_scope("video_rnn") as scope:
+            self.video_cell = MultiRNNCell([self.get_rnn_cell()] * (self.num_layers))
+
+            if self.architecture == "1video2text" or self.architecture == "parallel":
+                vid_rnn_states = [self.video_cell.zero_state(self.batch_size, tf.float32)]
+            elif self.architecture == "1text2video":
+                vid_rnn_states = [cap_rnn_states[-1]]
+
+            for i in range(self.lstm_steps):
+                if i > 0:
+                    scope.reuse_variables()
+
+                new_output, new_state = self.video_cell(
+                    self.embedded_feat_drop[:, i, :], vid_rnn_states[-1]
+                )
+
+                vid_rnn_states.append(
+                    (
+                    (new_state[0][0]*tf.expand_dims(self.video_mask[:, i], 1),
+                     new_state[0][1]*tf.expand_dims(self.video_mask[:, i], 1)),
+                    (new_state[1][0]*tf.expand_dims(self.video_mask[:, i], 1),
+                     new_state[1][1]*tf.expand_dims(self.video_mask[:, i], 1))
+                    )
+                )
+
+        return vid_rnn_states
+
+    def cap_rnn(self, vid_rnn_states=None):
+        with tf.variable_scope("caption_rnn") as scope:
+            self.caption_cell = MultiRNNCell([self.get_rnn_cell()] *self.num_layers)
+            if self.architecture == "1video2text":
+                cap_rnn_states = [vid_rnn_states[-1]]
+            elif self.architecture == "1text2video" or self.architecture == "parallel":
+                # set cap-rnn_states to zeros.
+                cap_rnn_states = [self.caption_cell.zero_state(self.batch_size, tf.float32)]
+
+            current_embedded_y = self.embedded_start_word
+            for i in range(self.lstm_steps):
+                if i > 0:
+                    scope.reuse_variables()
+
+                new_output, new_state = self.caption_cell(
+                    current_embedded_y, cap_rnn_states[-1]
+                )
+                cap_rnn_states.append(new_state)
+                current_embedded_y = self.embedded_captions[:, i, :]
+
+        return cap_rnn_states
 
 
 class CountBaseEvaluator:
@@ -229,7 +264,7 @@ class CountBaseEvaluator:
         with tf.variable_scope("evaluation"):
             self.summary_writer = None
             if summary_dir is not None:
-                self.summary_writer = tf.train.SummaryWriter(summary_dir)
+                self.summary_writer = tf.summary.FileWriter(summary_dir)
             self.build_eval_graph()
 
     def build_eval_graph(self):
@@ -261,9 +296,9 @@ class CountBaseEvaluator:
         with tf.control_dependencies([inc_total_loss, inc_total_l2, inc_total_correct, inc_example_count]):
             self.eval_step = tf.no_op(name='eval_step')
 
-        self.summary_v_loss = tf.scalar_summary("v_loss", self.mean_loss)
-        self.summary_v_acc = tf.scalar_summary("v_acc", self.accuracy)
-        self.summary_v_l2 = tf.scalar_summary("v_acc", self.eval_loss)
+        self.summary_v_loss = tf.summary.scalar("v_loss", self.mean_loss)
+        self.summary_v_acc = tf.summary.scalar("v_acc", self.accuracy)
+        self.summary_v_l2 = tf.summary.scalar("v_acc", self.eval_loss)
 
 
     def eval(self, batch_iter, test_size, global_step=None, sess=None,
@@ -278,13 +313,6 @@ class CountBaseEvaluator:
         for k, batch_chunk in enumerate(batch_iter):
 
             feed_dict = self.model.get_feed_dict(batch_chunk)
-            feed_dict[self.model.train_flag] = False
-
-            feed_dict[self.model.dropout_keep_prob_cell_input_t] = 1.0
-            feed_dict[self.model.dropout_keep_prob_cell_output_t] = 1.0
-            feed_dict[self.model.dropout_keep_prob_fully_connected_t] = 1.0
-            feed_dict[self.model.dropout_keep_prob_output_t] = 1.0
-            feed_dict[self.model.dropout_keep_prob_image_embed_t] = 1.0
 
             pred, val_acc, eval_loss_, _, mask = sess.run(
                 [self.model.predictions, self.model.acc, self.model.eval_loss,
@@ -351,22 +379,20 @@ class CountBaseTrainer:
             self.global_step = tf.Variable(0, name="global_step", trainable=False)
             self.optimizer = optimizer or tf.train.AdadeltaOptimizer()
 
-            gs, vs = zip(*self.optimizer.compute_gradients(model.mean_loss))
-            clipped_gs, _ = tf.clip_by_global_norm(gs, max_grad_norm)
             self.train_op = self.optimizer.apply_gradients(
-                zip(clipped_gs, vs), global_step=self.global_step)
+                model.mean_grad, global_step=self.global_step)
 
-            self.summary_mean_loss = tf.scalar_summary("mean_loss", model.mean_loss)
+            self.summary_mean_loss = tf.summary.scalar("mean_loss", model.mean_loss)
             self.train_summary_writer = None
             if train_summary_dir is not None:
-                self.train_summary_writer = tf.train.SummaryWriter(train_summary_dir, sess.graph_def)
+                self.train_summary_writer = tf.summary.FileWriter(train_summary_dir, sess.graph_def)
 
     def train_loop(self, train_iter, sess=None):
         sess = sess or tf.get_default_session()
         for batch_chunk in train_iter:
             start_ts = time.time()
             feed_dict = self.model.get_feed_dict(batch_chunk)
-            feed_dict[self.model.train_flag] = True
+            feed_dict[self.model.dropout_keep_prob_t] = self.model.dropout_keep_prob
 
             _, train_loss, train_acc, train_l2, current_step, summary = sess.run(
                 [self.train_op, self.model.mean_loss, self.model.acc, self.model.eval_loss, self.global_step, self.summary_mean_loss],
@@ -378,4 +404,3 @@ class CountBaseTrainer:
             end_ts = time.time()
             self.model.step += 1
             yield train_l2, train_acc, current_step, (end_ts - start_ts)
-

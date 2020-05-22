@@ -4,30 +4,29 @@ The TGIF-QA dataset contains 165K QA pairs for the animated GIFs from the [TGIF 
 
 
 
-In this repository, you can find the [code](code/README.md) and the [dataset](dataset/README.md) for our **CVPR 2017** paper.
+In this 'ijcv' branch, you can find the [code](code/README.md) and the [dataset](dataset/README.md) for our **IJCV** journal.
 
-* Yunseok Jang, Yale Song, Youngjae Yu, Youngjin Kim and Gunhee Kim. *TGIF-QA: Toward Spatio-Temporal Reasoning in Visual Question Answering*. In *CVPR*, 2017. (**Spotlight**) [[arxiv]](https://arxiv.org/abs/1704.04497)
+* Yunseok Jang, Yale Song, Chris Dongjoo Kim, Youngjae Yu, Youngjin Kim and Gunhee Kim. *Video Question Answering with Spatio-Temporal Reasoning*. *IJCV*, 2019. [[Journal Link]](https://link.springer.com/article/10.1007/s11263-019-01189-x)
 
 
 
 The code and the dataset are free to use for academic purposes only. If you use any of the material in this repository as part of your work, we ask you to cite:
 
 ```
-@inproceedings{jang-CVPR-2017,
-    author    = {Yunseok Jang and Yale Song and Youngjae Yu and Youngjin Kim and Gunhee Kim},
-    title     = "{TGIF-QA: Toward Spatio-Temporal Reasoning in Visual Question Answering}"
-    booktitle = {CVPR},
-    year      = 2017
+@article{jang-IJCV-2019,
+    author    = {Yunseok Jang and Yale Song and Chris Dongjoo Kim and Youngjae Yu and Youngjin Kim and Gunhee Kim},
+    title     = {{Video Question Answering with Spatio-Temporal Reasoning}}
+    journal   = {IJCV},
+    year      = {2019}
 }
 ```
 
-Note: Since our CVPR 2017 paper, we extended our dataset by collecting more question and answer pairs (the total count has increased from 104K to 165K) and re-ran experiments with the new dataset. The archive paper is the most update one.
-
+Note: Since our CVPR 2017 paper, we extended our dataset by collecting more question and answer pairs (the total count has increased from 104K to 165K) and re-ran experiments with the new dataset. The journal and the arXiv paper is the most update one. 
 
 
 Have any question? Please contact:
 
-Yunseok Jang [(yunseok.jang@snu.ac.kr)](mailto:yunseok.jang@snu.ac.kr) and Yale Song [(yalesong@csail.mit.edu)](mailto:yalesong@csail.mit.edu)
+Yunseok Jang [(yunseok.jang@snu.ac.kr)](mailto:yunseok.jang@snu.ac.kr), Yale Song [(yalesong@csail.mit.edu)](mailto:yalesong@csail.mit.edu) and Chris Dongjoo Kim [(cdjkim@vision.snu.ac.kr)](mailto:cdjkim@vision.snu.ac.kr)
 
 
 
@@ -61,21 +60,17 @@ Yunseok Jang [(yunseok.jang@snu.ac.kr)](mailto:yunseok.jang@snu.ac.kr) and Yale 
 
 ## Quantitative Results
 
-| Model                                    | Repetition Count (L2 loss) | Repeating Action (Accuracy) | State Transition (Accuracy) | Frame QA (Accuracy) |
-| ---------------------------------------- | ---------------------: | --------------------------: | --------------------------: | ------------------: |
-| Random Chance                            |                 6.9229 |                       20.00 |                       20.00 |                0.06 |
-| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (aggr) [NIPS 2015] |                 5.0921 |                       46.84 |                       56.85 |               34.59 |
-| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (avg) [NIPS 2015] |                 4.8095 |                       48.77 |                       34.82 |               34.97 |
-| [VQA-MCB](https://arxiv.org/abs/1606.01847) (aggr) [EMNLP 2016] |                 5.1738 |                       58.85 |                       24.27 |               25.70 |
-| [VQA-MCB](https://arxiv.org/abs/1606.01847) (avg) [EMNLP 2016] |                 5.5428 |                       29.13 |                       32.96 |               15.49 |
-| [Yu et al.](https://arxiv.org/abs/1610.02947) [CVPR 2017] |                 5.1387 |                       56.14 |                       63.95 |               39.64 |
-| ST-VQA-Text                              |                 5.0056 |                       47.91 |                       56.93 |               39.26 |
-| ST-VQA-ResNet                            |                 4.5539 |                       59.04 |                       65.56 |               45.60 |
-| ST-VQA-C3D                               |                 4.4478 |                       59.26 |                       64.90 |               45.18 |
-| <u>ST-VQA-Concat</u>                     |          <u>4.3759</u> |                <u>60.13</u> |                <u>65.70</u> |        <u>48.20</u> |
-| ST-VQA-Sp.                               |             **4.2825** |                       57.33 |                       63.72 |               45.45 |
-| **ST-VQA-Tp.**                           |                 4.3981 |                   **60.77** |                   **67.06** |           **49.27** |
-| ST-VQA-Sp.Tp.                            |                 4.5614 |                       56.99 |                       59.59 |               47.79 |
+| Model                                    | Repetition Count (L2 loss)   | Repeating Action (Accuracy) | State Transition (Accuracy) | Frame QA (Accuracy) |
+| ---------------------------------------- | ---------------------------: | --------------------------: | --------------------------: | ------------------: |
+| Random Chance                            |                        19.62 |                       20.00 |                       20.00 |                0.06 |
+| Most Frequent words                      |                         7.78 |                       31.40 |                       30.05 |               17.49 |
+| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (aggr) [NIPS 2015] |  5.09 |                       46.84 |                       56.85 |               34.59 |
+| [VIS+LSTM](https://arxiv.org/abs/1505.02074) (avg) [NIPS 2015] |   4.81 |                       48.77 |                       34.82 |               34.97 |
+| [VQA-MCB](https://arxiv.org/abs/1606.01847) (aggr) [EMNLP 2016] |  5.17 |                       58.85 |                       24.27 |               25.70 |
+| [VQA-MCB](https://arxiv.org/abs/1606.01847) (avg) [EMNLP 2016] |   5.54 |                       29.13 |                       32.96 |               15.49 |
+| [CT-SAN](https://arxiv.org/abs/1610.02947) [CVPR 2017] |           5.14 |                       56.14 |                       63.95 |               39.64 |
+| [Co-Memory](https://arxiv.org/abs/1803.10906) [CVPR 2018] |      **4.10** |                       68.20 |                       74.30 |               51.50 |
+| **ST-VQA (Ours)**                          |                         4.22 |                     **73.48** |                     **79.72** |             **51.96** |
 
 
 
@@ -115,4 +110,4 @@ The yellow bar indicates the strength of temporal attention at the visualized ti
 
 ## Notes
 
-Last Edit: January 08, 2019
+Last Edit: May 17, 2020

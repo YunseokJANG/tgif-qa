@@ -1,1 +1,1 @@
-python main.py --task='Trans' --name='Tp' --max_sequence_length=35 --hidden_dim=512 --batch_size=64 --checkpoint_path='pretrained_models/trans_tp/cp' --vc_dir='pretrained_models/trans_tp/Vocabulary' --test_phase=True
+python main.py --task='Trans' --name='Tp' --max_sequence_length=35 --hidden_dim=512 --batch_size=64 --checkpoint_path='pretrained_models/trans_tp/cp' --test_phase=True
