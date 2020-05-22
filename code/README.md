@@ -14,9 +14,10 @@ ST-VQA model
     ```
     conda create -n tgifqa -y
     source activate tgifqa
-    conda install -c conda-forge python=2.7.15 -y
-    conda install -c conda-forge mkl mkl-include enum34 -y
-    conda install -c anaconda tensorflow-gpu=1.4.1 tensorflow-tensorboard=0.4.0 cudatoolkit=8.0 cudnn=7.1.3 backports.weakref=1.0.post1 -y
+    conda install -c conda-forge python=2.7.15 backports.weakref=1.0.post1 -y
+    conda install -c conda-forge mkl mkl-include mkl-dnn enum34 -y
+    conda install -c free cudatoolkit=8.0 cudnn=6.0.21 -y
+    conda install -c anaconda -c conda-forge -c free tensorflow-gpu=1.4.1 tensorflow-tensorboard=0.4.0 backports.weakref=1.0.post1 cudatoolkit=8.0 cudnn=6.0.21 -y
     ```
 
 2. Install python modules
@@ -115,4 +116,4 @@ Run Pretrained Models
 
 ## Notes
 
-Last Edit: May 22, 2020
+Last Edit: Apr 25, 2021
