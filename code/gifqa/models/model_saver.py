@@ -10,6 +10,7 @@ from IPython import embed
 class ModelSaver:
     @classmethod
     def from_dict(cls, dict):
+        print (cls.PARAMS)
         param_dict = {k: dict[k] for k in cls.PARAMS}
         print(param_dict)
         return cls(**param_dict)
