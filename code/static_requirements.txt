@@ -6,7 +6,7 @@ spacy==2.1.6
 jupyter==1.0.0
 matplotlib==1.5.0
 easydict==1.6
-pillow==3.2.0
+pillow==8.1.1
 scikit-learn==0.17.1
 scikit-image==0.12.3
 pandas==0.19.2
